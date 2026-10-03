@@ -1,0 +1,79 @@
+/* style.qss: служебное ПО прокторинга. Спокойный офисный стиль. */
+* {
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  color: #1A1A1A;
+}
+QMainWindow, QWidget#root, QWidget {
+  background: #F5F5F5;
+}
+QWidget#panel, QFrame#panel, QGroupBox {
+  background: #FFFFFF;
+  border: 1px solid #CCCCCC;
+  border-radius: 2px;
+}
+QLabel#title {
+  font-size: 18px;
+  font-weight: bold;
+}
+QLabel#subtitle {
+  font-size: 16px;
+  font-weight: bold;
+}
+QLabel#status {
+  font-size: 14px;
+}
+QLabel#statusBad {
+  font-size: 14px;
+  color: #B00020;
+}
+QLabel#statusWarn {
+  font-size: 14px;
+  color: #8A6D00;
+}
+QLineEdit {
+  background: #FFFFFF;
+  border: 1px solid #CCCCCC;
+  border-radius: 2px;
+  padding: 8px;
+  selection-background-color: #2B579A;
+  selection-color: #FFFFFF;
+}
+QLineEdit:focus {
+  border: 1px solid #2B579A;
+}
+QPushButton {
+  background: #2B579A;
+  color: #FFFFFF;
+  border: 1px solid #2B579A;
+  border-radius: 2px;
+  padding: 8px 16px;
+}
+QPushButton:disabled {
+  background: #FFFFFF;
+  color: #808080;
+  border: 1px solid #CCCCCC;
+}
+QPushButton#secondary {
+  background: #FFFFFF;
+  color: #1A1A1A;
+  border: 1px solid #CCCCCC;
+}
+QTableWidget, QTableView {
+  background: #FFFFFF;
+  border: 1px solid #CCCCCC;
+  gridline-color: #CCCCCC;
+}
+QHeaderView::section {
+  background: #FFFFFF;
+  border: 1px solid #CCCCCC;
+  padding: 8px;
+  font-weight: bold;
+}
+QLabel#camera {
+  background: #000000;
+  border: 1px solid #CCCCCC;
+}
+QLabel#dot {
+  background: #B00020;
+}

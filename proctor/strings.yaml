@@ -1,0 +1,59 @@
+# Тексты интерфейса, русский по умолчанию.
+# Для казахского скопировать файл в strings_kz.yaml и перевести значения.
+start_title: Начало тестирования
+start_fio: ФИО студента
+start_button: Начать калибровку
+camera_found: Камера найдена
+camera_not_found: Камера не найдена
+calib_text: Смотрите на точку
+calib_left: Осталось
+calib_cancel: Отмена
+test_title: Тестирование
+watch_active: Наблюдение активно
+watch_fixed: Зафиксировано
+result_title: Тестирование завершено
+result_open: Открыть отчёт
+result_exit: Выход
+examiner_title: Наблюдение за сессией
+examiner_active: Активна
+examiner_done: Завершена
+examiner_finish: Завершить сессию
+report_title: Отчет по сессии
+second_monitor_msg: Отключите второй монитор
+no_violations: Нарушений не зафиксировано
+total: Итого
+unlock_button: Ввод пароля
+preview_empty: Нет видеосигнала
+test_unavailable: Тест недоступен. Обратитесь к экзаменатору.
+student: Студент
+no_frame: Нет кадра
+th_time: Время
+th_type: Тип
+th_duration: Длительность
+th_shot: Скриншот
+violations: Нарушений
+session_status: Статус сессии
+trust_score: Индекс доверия
+integrity: Целостность лога
+integrity_ok: OK
+integrity_failed: ОШИБКА
+vc_label: Виртуальная камера
+vc_msg: Обнаружена виртуальная камера. Используйте реальную веб-камеру.
+events: события
+trust_labels:
+  PHONE_DETECTED: телефон
+  PHONE_RAISED: телефон поднят
+  PHONE_AIMED: съемка экрана
+  GAZE_DOWN: взгляд вниз
+  GAZE_LEFT: взгляд влево
+  GAZE_RIGHT: взгляд вправо
+  NO_FACE: нет человека
+  MULTI_FACE: второе лицо
+  HOTKEY_BLOCKED: горячие клавиши
+  FOCUS_LOST: потеря фокуса
+  SECOND_MONITOR: второй монитор
+  TAB_SWITCH: переключение вкладок
+  NAV_BLOCKED: чужой домен
+  FORBIDDEN_PROCESS: запрещенный процесс
+  COPY_ATTEMPT: копирование
+  CAMERA_COVERED: камера закрыта

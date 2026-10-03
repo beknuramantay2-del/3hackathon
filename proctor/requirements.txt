@@ -1,0 +1,13 @@
+# Proctor MVP — Qostanai Industry Hackathon, Case 3
+# Python 3.10-3.11, PyQt6, ultralytics, MediaPipe, OpenCV
+ultralytics>=8.2
+mediapipe>=0.10.9
+opencv-python>=4.8
+PyQt6>=6.6
+PyQt6-WebEngine>=6.6
+psutil>=5.9
+screeninfo>=0.8
+keyboard>=0.13
+pyyaml>=6.0
+numpy>=1.24
+pywin32>=306; sys_platform == "win32"
