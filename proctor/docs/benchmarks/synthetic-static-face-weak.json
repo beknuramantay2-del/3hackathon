@@ -1,0 +1,123 @@
+{
+  "code_fingerprint_sha256": "4ee6e4719451d681753ccf51afa3b1d06cb3ca994a20b5664d5df5b5a1e61525",
+  "source": "/data/synthetic_static_face.mp4",
+  "synthetic": true,
+  "profile": "weak",
+  "startup_seconds": 2.8372690930000317,
+  "measured_seconds": 15.002301446000274,
+  "camera_frames": 449,
+  "camera_fps": 29.92874137452469,
+  "rendered_frames": 448,
+  "render_fps": 29.862084934937776,
+  "yolo_fps": 5.932423123235407,
+  "face_fps": 11.864846246470814,
+  "timings": {
+    "logic": {
+      "n": 2829,
+      "mean_ms": 0.04317928419787944,
+      "p50_ms": 0.04178199969828711,
+      "p95_ms": 0.0590130002819933
+    },
+    "camera_read": {
+      "n": 448,
+      "mean_ms": 0.3991701808061521,
+      "p50_ms": 0.35791899972537067,
+      "p95_ms": 0.5465120002554613
+    },
+    "ui_render": {
+      "n": 448,
+      "mean_ms": 0.8700041852713574,
+      "p50_ms": 0.8266889999504201,
+      "p95_ms": 1.0485530001460575
+    },
+    "preview_latency": {
+      "n": 448,
+      "mean_ms": 3.2874822075795254,
+      "p50_ms": 3.2034699997893767,
+      "p95_ms": 5.657488999986526
+    },
+    "mediapipe": {
+      "n": 178,
+      "mean_ms": 6.7561030898789625,
+      "p50_ms": 6.573341000148503,
+      "p95_ms": 7.968561999859958
+    },
+    "head_pose": {
+      "n": 178,
+      "mean_ms": 0.4521952584270642,
+      "p50_ms": 0.41577599995434866,
+      "p95_ms": 0.6271029997151345
+    },
+    "eye_gaze": {
+      "n": 178,
+      "mean_ms": 0.16455714608178987,
+      "p50_ms": 0.15631199994459166,
+      "p95_ms": 0.20760999996127794
+    },
+    "FaceMeshThread_frame_age": {
+      "n": 178,
+      "mean_ms": 26.970576134836143,
+      "p50_ms": 26.216962000034982,
+      "p95_ms": 42.62291400027607
+    },
+    "yolo": {
+      "n": 89,
+      "mean_ms": 29.931693224727823,
+      "p50_ms": 29.079140000249026,
+      "p95_ms": 34.964623999712785
+    },
+    "postprocess": {
+      "n": 89,
+      "mean_ms": 0.06218668542122318,
+      "p50_ms": 0.06246900011319667,
+      "p95_ms": 0.07244200014611124
+    },
+    "tracker": {
+      "n": 89,
+      "mean_ms": 0.011984943800976661,
+      "p50_ms": 0.011826999980257824,
+      "p95_ms": 0.015033999716251856
+    },
+    "DetectorYolo_frame_age": {
+      "n": 89,
+      "mean_ms": 41.207129393283495,
+      "p50_ms": 41.58787000005759,
+      "p95_ms": 48.01395499998762
+    },
+    "decision_data_age": {
+      "n": 2794,
+      "mean_ms": 125.33768221081083,
+      "p50_ms": 121.58570099973076,
+      "p95_ms": 196.98385899982895
+    },
+    "HandsThread_frame_age": {
+      "n": 60,
+      "mean_ms": 20.1586363000312,
+      "p50_ms": 20.16232599999057,
+      "p95_ms": 34.39577500012092
+    }
+  },
+  "diagnostic_events_uncalibrated": {
+    "HEAD_DOWN": 3
+  },
+  "cpu_process_percent": 34.34285714285714,
+  "rss_peak_mb": 622.890625,
+  "effective_imgsz": 320,
+  "effective_yolo_hz": 6,
+  "effective_face_hz": 12,
+  "error": "",
+  "host": {
+    "cpu_count": 2,
+    "platform": "linux"
+  },
+  "limitations": [
+    "sensor exposure latency not measured",
+    "no accuracy claim without labelled videos",
+    "UI+overlay conversion measured without WebEngine/test-page load"
+  ],
+  "fixture_provenance": {
+    "type": "static public portrait encoded as 640x480 30fps video; NOT webcam validation",
+    "original_image": "https://raw.githubusercontent.com/opencv/opencv/master/samples/data/lena.jpg",
+    "included_in_repository": false
+  }
+}

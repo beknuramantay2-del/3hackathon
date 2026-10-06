@@ -1,35 +1,44 @@
-"""Clipboard guard: clear on timer + on change signal."""
-from PyQt6.QtCore import QThread
+"""GUI-thread clipboard guard. Ignore self-clears, throttle external change bursts."""
+import time
+from PyQt6.QtCore import QObject,QTimer
 
-class ClipboardGuard(QThread):
-    def __init__(self, app, interval=5.0, on_violation=None, parent=None):
+class ClipboardGuard(QObject):
+    def __init__(self,app,interval=5.,on_violation=None,parent=None):
         super().__init__(parent)
-        self.app = app
-        self.interval = interval
-        self.on_violation = on_violation
-        self._run = True
+        self.app,self.on_violation = app,on_violation
+        self.cb = app.clipboard()
+        self._clearing = False
+        self._active = False
+        self._last_hit = -1e9
+        self.timer = QTimer(self)
+        self.timer.setInterval(max(100,int(interval*1000)))
+        self.timer.timeout.connect(self._hit)
 
-    def run(self):
-        try:
-            cb = self.app.clipboard()
-            cb.dataChanged.connect(lambda: self._hit())
-        except Exception:
-            pass
-        while self._run:
-            try:
-                self.app.clipboard().clear()
-            except Exception:
-                pass
-            self.msleep(int(self.interval * 1000))
+    def start(self):
+        if not self._active:
+            self._active = True
+            self.cb.dataChanged.connect(self._hit)
+            self.timer.start()
 
     def _hit(self):
+        if self._clearing or not self._active:
+            return
+        md = self.cb.mimeData()
+        if md is None or not md.formats():
+            return
+        self._clearing = True
         try:
-            self.app.clipboard().clear()
-        except Exception:
-            pass
-        if self.on_violation:
-            self.on_violation("COPY_ATTEMPT")
+            self.cb.clear()
+        finally:
+            self._clearing = False
+        now = time.monotonic()
+        if now-self._last_hit >= 1.:
+            self._last_hit = now
+            if self.on_violation:
+                self.on_violation("COPY_ATTEMPT")
 
     def stop(self):
-        self._run = False
-        self.wait(1000)
+        self.timer.stop()
+        if self._active:
+            self.cb.dataChanged.disconnect(self._hit)
+        self._active = False

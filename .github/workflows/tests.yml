@@ -1,0 +1,17 @@
+name: CV MVP regression tests
+on: [push, pull_request]
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r proctor/requirements-dev.txt
+      - run: python -m compileall -q proctor
+      - run: python -m pytest -q proctor/tests

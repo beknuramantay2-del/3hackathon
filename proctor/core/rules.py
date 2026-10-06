@@ -1,132 +1,119 @@
-"""HoldRule + RuleEngine state machine on time.monotonic()."""
+"""Freshness-gated independent HEAD/GAZE and monotonic hold/cooldown rules."""
 import time
-from .models import FaceResult, YoloResult
+from .models import FaceResult,YoloResult,HandResult
+from .directions import DirectionState
+from .tracking import iou,coords
 
 class HoldRule:
-    def __init__(self, hold, cooldown=5.0, gap_tolerance=0.3):
-        self.hold = hold
-        self.cooldown = cooldown
-        self.gap = gap_tolerance
-        self._start = None
-        self._gap_start = None
+    def __init__(self, hold, cooldown=5., gap_tolerance=.3):
+        self.hold,self.cooldown,self.gap = hold,cooldown,gap_tolerance
+        self._start = self._gap_start = None
         self._last_fire = -1e9
 
-    def update(self, cond: bool, now: float) -> bool:
+    def reset(self):
+        self._start = self._gap_start = None
+
+    def update(self, cond, now):
+        if self._gap_start is not None and now-self._gap_start > self.gap:
+            self.reset()  # also reset on true: a gap does not disappear between samples
         if cond:
             if self._start is None:
                 self._start = now
             self._gap_start = None
-            if now - self._start >= self.hold and now - self._last_fire >= self.cooldown:
+            if now-self._start >= self.hold and now-self._last_fire >= self.cooldown:
                 self._last_fire = now
                 return True
-            return False
-        else:
-            if self._start is None:
-                return False
+        elif self._start is not None:
             if self._gap_start is None:
                 self._gap_start = now
-            if now - self._gap_start > self.gap:
-                self._start = None
-                self._gap_start = None
-            return False
+        return False
 
     def active_duration(self, now):
-        return (now - self._start) if self._start else 0.0
-
+        return max(0.,now-self._start) if self._start is not None else 0.
 
 class RuleEngine:
-    """Consumes latest FaceResult + YoloResult, emits violation type strings."""
-
-    def __init__(self, cfg, calib_base=None):
-        r = cfg["rules"]
-        g = r.get("gap_tolerance", 0.3)
-        self.cfg = cfg
-        self.calib = calib_base or {}
-        self.rules = {
-            "PHONE_DETECTED": HoldRule(r["phone_detected"]["hold"], r["phone_detected"]["cooldown"], g),
-            "PHONE_RAISED": HoldRule(r["phone_raised"]["hold"], r["phone_raised"]["cooldown"], g),
-            "PHONE_AIMED": HoldRule(r["phone_aimed"]["hold"], r["phone_aimed"]["cooldown"], g),
-            "GAZE_DOWN": HoldRule(r["gaze_down"]["hold"], r["gaze_down"]["cooldown"], g),
-            "GAZE_LEFT": HoldRule(r["gaze_side"]["hold"], r["gaze_side"]["cooldown"], g),
-            "GAZE_RIGHT": HoldRule(r["gaze_side"]["hold"], r["gaze_side"]["cooldown"], g),
-            "NO_FACE": HoldRule(r["no_face"]["hold"], r["no_face"]["cooldown"], g),
-            "MULTI_FACE": HoldRule(r["multi_face"]["hold"], r["multi_face"]["cooldown"], g),
-            "CAMERA_COVERED": HoldRule(r["camera_covered"]["hold"], r["camera_covered"]["cooldown"], g),
-        }
-        self.face = FaceResult()
-        self.yolo = YoloResult()
+    def __init__(self,cfg,calib_base=None):
+        self.cfg,self.calib = cfg,calib_base or {}
+        self.face,self.yolo,self.hands = FaceResult(),YoloResult(),HandResult()
         self.phone_voted = False
         self.debug = {}
-        self._raised_start = None  # непрерывное удержание телефона в зоне съёмки
+        self.head,self.gaze = DirectionState("head"),DirectionState("gaze")
+        r = cfg["rules"]
+        self.key_of = {"PHONE_DETECTED":"phone_detected","PHONE_RAISED":"phone_raised",
+                       "PHONE_AIMED":"phone_aimed","PHONE_LIFTED":"phone_raised","PHONE_IN_HAND":"phone_detected",
+                       "NO_FACE":"no_face","MULTI_FACE":"multi_face","CAMERA_COVERED":"camera_covered"}
+        for prefix in ("HEAD","GAZE"):
+            for d in ("LEFT","RIGHT","UP","DOWN"):
+                self.key_of[f"{prefix}_{d}"] = "gaze_down" if d in ("UP","DOWN") else "gaze_side"
+        self.rules = {name:HoldRule(r[key]["hold"],r[key]["cooldown"],r.get("gap_tolerance",.3))
+                      for name,key in self.key_of.items()}
+        self.rules["PHONE_LIFTED"].hold = .15
 
-    def on_face(self, f: FaceResult):
+    def reset(self):
+        for rule in self.rules.values():
+            rule.reset()
+        self.head.reset(); self.gaze.reset()
+
+    def on_face(self,f):
+        if f.primary_changed:
+            self.reset()
         self.face = f
 
-    def on_yolo(self, y: YoloResult, voted: bool):
+    def on_yolo(self,y,voted=None):
         self.yolo = y
-        self.phone_voted = voted
+        self.phone_voted = y.phone_voted if voted is None else voted
 
-    def _in_shoot_zone(self) -> bool:
-        """Phone center above chin or intersects expanded face box."""
-        if not self.yolo.phones or not self.face.face_box:
-            return bool(self.yolo.phones)  # fallback: any phone counts as raised
-        fx1, fy1, fx2, fy2 = self.face.face_box
-        chin_y = fy2 - (fy2 - fy1) * 0.15
+    def on_hands(self,h):
+        self.hands = h
+
+    @staticmethod
+    def fresh(result,now,ttl=.7):
+        # Zero timestamp supports explicitly supplied synchronous fixtures; real workers always timestamp.
+        return not result.error and (result.captured_at == 0 or 0 <= now-result.captured_at <= ttl)
+
+    def _in_shoot_zone(self,face_valid):
+        if not face_valid or not self.face.face_box:
+            return False  # no face is NOT evidence of a raised phone
+        fx1,fy1,fx2,fy2 = self.face.face_box
+        fw,fh = fx2-fx1,fy2-fy1
         for p in self.yolo.phones:
-            cx, cy = (p.x1 + p.x2) / 2, (p.y1 + p.y2) / 2
-            expand = (fx1 - 60, fy1 - 60, fx2 + 60, fy2 + 60)
-            if cy < chin_y or (expand[0] < cx < expand[2] and expand[1] < cy < expand[3]):
+            if not (p.observed and p.confirmed):
+                continue
+            cx,cy = (p.x1+p.x2)/2,(p.y1+p.y2)/2
+            if fx1-fw*.7 < cx < fx2+fw*.7 and fy1-fh*.6 < cy < fy2-fh*.1:
                 return True
         return False
 
-    def tick(self, now=None):
-        now = now if now is not None else time.monotonic()
-        f, cfg, out = self.face, self.cfg["rules"], []
-        yaw0 = self.calib.get("yaw", 0.0)
-        pitch0 = self.calib.get("pitch", 0.0)
-        # MAD-адаптивные пороги: разброс калибровки расширяет допуск
-        yaw_mad = self.calib.get("yaw_mad", 5.0)
-        pitch_mad = self.calib.get("pitch_mad", 5.0)
-        yaw_thresh = max(cfg["gaze_side"]["yaw_thresh"], yaw_mad * 3.0)
-        pitch_thresh = max(cfg["gaze_down"]["pitch_thresh"], pitch_mad * 3.0)
-        dyaw, dpitch = f.yaw - yaw0, f.pitch - pitch0
-        # iris deviation from calib (0..1)
-        iris_h0 = self.calib.get("iris_h", 0.5)
-        d_iris = abs(f.iris_h - iris_h0)
-
-        c_phone = self.phone_voted
-        c_raised = c_phone and self._in_shoot_zone()
-        # AIMED: непрерывное удержание в зоне съёмки, не зависит от срабатывания RAISED
-        if c_raised:
-            if self._raised_start is None:
-                self._raised_start = now
-        else:
-            self._raised_start = None
-        raised_dur = (now - self._raised_start) if self._raised_start is not None else 0.0
-        aimed_active = raised_dur >= cfg["phone_aimed"]["hold"] and c_raised
-        c_down = (dpitch > pitch_thresh) or (f.iris_v > 0.72)
-        c_left = (dyaw > yaw_thresh) or (f.iris_h < iris_h0 - cfg["gaze_side"]["iris_thresh"])
-        c_right = (dyaw < -yaw_thresh) or (f.iris_h > iris_h0 + cfg["gaze_side"]["iris_thresh"])
-        c_no = f.n_faces == 0
-        c_multi = (f.n_faces >= 2) or (self.yolo.n_persons >= 2)
-        c_cover = (f.brightness < cfg["camera_covered"]["brightness_thresh"] and
-                   f.variance < cfg["camera_covered"]["variance_thresh"])
-
-        conds = {"PHONE_DETECTED": c_phone, "PHONE_RAISED": c_raised,
-                 "PHONE_AIMED": aimed_active, "GAZE_DOWN": c_down,
-                 "GAZE_LEFT": c_left, "GAZE_RIGHT": c_right,
-                 "NO_FACE": c_no, "MULTI_FACE": c_multi, "CAMERA_COVERED": c_cover}
-        key_of = {"PHONE_DETECTED": "phone_detected", "PHONE_RAISED": "phone_raised",
-                  "PHONE_AIMED": "phone_aimed", "GAZE_DOWN": "gaze_down",
-                  "GAZE_LEFT": "gaze_side", "GAZE_RIGHT": "gaze_side",
-                  "NO_FACE": "no_face", "MULTI_FACE": "multi_face",
-                  "CAMERA_COVERED": "camera_covered"}
-        self.debug = dict(dyaw=dyaw, dpitch=dpitch, iris_h=f.iris_h,
-                          n_faces=f.n_faces, phones=len(self.yolo.phones),
-                          bright=f.brightness, conds=conds)
-        for k, c in conds.items():
-            if not cfg.get(key_of[k], {}).get("enabled", True):
-                continue
-            if self.rules[k].update(c, now):
+    def tick(self,now=None):
+        now = time.monotonic() if now is None else now
+        f,y = self.face,self.yolo
+        ff,yf,hf = self.fresh(f,now),self.fresh(y,now),self.fresh(self.hands,now,.5)
+        present = ff and f.n_faces >= 1
+        base = dict(self.calib)
+        base["head_x_threshold"] = max(base.get("head_x_threshold",0),self.cfg["rules"]["gaze_side"]["yaw_thresh"])
+        base["head_y_threshold"] = max(base.get("head_y_threshold",0),self.cfg["rules"]["gaze_down"]["pitch_thresh"])
+        base.setdefault("gaze_x_threshold",self.cfg["rules"]["gaze_side"]["iris_thresh"])
+        head = self.head.update(f.yaw,f.pitch,base,now,present and f.pose_valid and not f.primary_changed)
+        gaze = self.gaze.update(f.iris_h,f.iris_v,base,now,present and f.gaze_valid and not f.primary_changed)
+        phone = yf and self.phone_voted
+        raised = phone and self._in_shoot_zone(present)
+        lifted = phone and any(p.confirmed and p.observed and (p.velocity[1]+p.velocity[3])/2 < -max(60.,(p.y2-p.y1)*1.2) for p in y.phones)
+        held = phone and hf and any(iou(coords(p),b) > .015 for p in y.phones if p.confirmed and p.observed for b in self.hands.boxes)
+        conds = {"PHONE_DETECTED":phone,"PHONE_RAISED":raised,"PHONE_LIFTED":lifted,"PHONE_AIMED":raised,
+                 "PHONE_IN_HAND":held,"NO_FACE":ff and f.n_faces == 0,
+                 "MULTI_FACE":ff and f.n_faces >= 2,
+                 "CAMERA_COVERED":ff and f.brightness < self.cfg["rules"]["camera_covered"]["brightness_thresh"]
+                    and f.variance < self.cfg["rules"]["camera_covered"]["variance_thresh"]}
+        for prefix,state in (("HEAD",head),("GAZE",gaze)):
+            for d in ("LEFT","RIGHT","UP","DOWN"):
+                conds[f"{prefix}_{d}"] = state == d
+        out = []
+        for k,c in conds.items():
+            if self.cfg["rules"][self.key_of[k]].get("enabled",True) and self.rules[k].update(c,now):
                 out.append(k)
+        self.debug = dict(head=head,gaze=gaze,dyaw=f.yaw-base.get("yaw",0),dpitch=f.pitch-base.get("pitch",0),
+                          iris_h=float(f.iris_h),iris_v=float(f.iris_v),n_faces=f.n_faces if ff else None,
+                          phones=len(y.phones) if yf else None,bright=f.brightness,conds=conds,
+                          durations={k:r.active_duration(now) for k,r in self.rules.items()},
+                          camera_fresh=ff,phone_aimed="heuristic: position+hold, not camera orientation")
         return out

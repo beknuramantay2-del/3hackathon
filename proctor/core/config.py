@@ -140,6 +140,29 @@ def load_config(path=None, profile=None):
         if not isinstance(v, (int, float)) or v < 0:
             raise ConfigError(f"{NAME}: поле 'trust_weights.{k}' должно быть числом >= 0")
 
+    # Runtime budgets must be valid: no division by zero or impossible voting windows.
+    for section, key in (("yolo", "imgsz"), ("yolo", "target_fps"), ("yolo", "vote_window"),
+                         ("face", "max_faces"), ("calibration", "duration_sec")):
+        if cfg[section][key] <= 0:
+            raise ConfigError(f"{NAME}: {section}.{key} должно быть > 0")
+    if cfg["face"]["max_faces"] < 2:
+        raise ConfigError(f"{NAME}: face.max_faces >= 2 для Кейс №3")
+    if cfg["yolo"]["vote_threshold"] < 1 or cfg["yolo"]["vote_threshold"] > cfg["yolo"]["vote_window"]:
+        raise ConfigError(f"{NAME}: неверные параметры vote_threshold/vote_window")
+    for key in ("conf_phone", "conf_person"):
+        if not 0 < cfg["yolo"][key] <= 1:
+            raise ConfigError(f"{NAME}: yolo.{key} должно быть в (0, 1]")
+    perf = cfg.get("performance", {})
+    if perf.get("mode", "auto") not in ("auto", "weak", "balanced"):
+        raise ConfigError(f"{NAME}: performance.mode должно быть auto/weak/balanced")
+    for section,key,default in (("face","target_fps",15),("face","hands_fps",5),
+                                ("face","max_width",640),("performance","threads",2)):
+        value = cfg.get(section,{}).get(key,default)
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or value <= 0:
+            raise ConfigError(f"{NAME}: {section}.{key} должно быть > 0")
+    if cfg["calibration"]["duration_sec"] < 10:
+        raise ConfigError(f"{NAME}: calibration.duration_sec >= 10 для пяти поз")
+
     cfg["profile"] = prof
     cfg["_domains"] = domains
     cfg["_test_url"] = url

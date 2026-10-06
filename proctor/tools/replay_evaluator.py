@@ -1,7 +1,8 @@
 """Прогон видео через YOLO + FaceMesh + RuleEngine и сверка с разметкой GT.
 
 Метрики: precision/recall/latency на тип, общий weighted_f1.
-Калибровка: медиана первых 5 секунд видео. Шкала времени: метки видео.
+Калибровка: five (20с поз как в UI), center (5с прямо) или none.
+Center/none не доказывают качество персональных порогов. Шкала: метки видео.
 """
 import argparse
 import json
@@ -9,7 +10,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from proctor.core.config import load_config, ConfigError
 from proctor.core.rules import RuleEngine
@@ -17,107 +18,75 @@ from proctor.core.models import FaceResult, YoloResult, Box
 from proctor.core.calibration import Calibration
 
 TOL = 0.5
-PNP_IDX = [1, 152, 33, 263, 61, 291]
 
-import numpy as np
-
-
-def head_pose(pts, w, h):
+def run(video, cfg, calibration_mode="five"):
     import cv2
-    import math
-    model = np.array([(0, 0, 0), (-165, -170, -135), (165, -170, -135),
-                      (-150, -150, -125), (150, -150, -125), (0, -330, -65)], dtype=np.float64)
-    img = np.array([(pts[i][0], pts[i][1]) for i in PNP_IDX], dtype=np.float64)
-    cam = np.array([[w, 0, w / 2], [0, w, h / 2], [0, 0, 1]], dtype=np.float64)
-    try:
-        _, rvec, _ = cv2.solvePnP(model, img, cam, np.zeros((4, 1)))
-        rmat, _ = cv2.Rodrigues(rvec)
-        yaw = math.degrees(math.atan2(rmat[1, 0], rmat[0, 0]))
-        pitch = math.degrees(math.atan2(-rmat[2, 0], (rmat[2, 1] ** 2 + rmat[2, 2] ** 2) ** 0.5))
-        return yaw, pitch
-    except Exception:
-        return 0.0, 0.0
-
-
-def iris(pts):
-    try:
-        center = pts[468:478].mean(axis=0)
-        dl = abs(pts[133][0] - pts[33][0]) + 1e-6
-        dr = abs(pts[263][0] - pts[362][0]) + 1e-6
-        h = float(np.clip(((center[0] - pts[33][0]) / dl + (center[0] - pts[362][0]) / dr) / 2, 0, 1))
-        top = (pts[159][1] + pts[386][1]) / 2
-        bot = (pts[145][1] + pts[374][1]) / 2
-        v = float(np.clip((center[1] - top) / (bot - top + 1e-6), 0, 1))
-        return h, v
-    except Exception:
-        return 0.5, 0.5
-
-
-def run(video, cfg):
-    import cv2
-    from ultralytics import YOLO
-    import mediapipe as mp
-
+    from proctor.core.pipeline import FramePacket
+    from proctor.core.face_mesh import FaceMeshThread
+    from proctor.core.detector_yolo import DetectorYolo
+    from proctor.core.hands import HandsThread
     cap = cv2.VideoCapture(video)
     if not cap.isOpened():
-        raise SystemExit(f"нет видеофайла: {video}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    yolo = YOLO(cfg["yolo"]["model"])
-    mesh = mp.solutions.face_mesh.FaceMesh(
-        max_num_faces=cfg["face"]["max_faces"], refine_landmarks=True,
-        min_detection_confidence=0.5, min_tracking_confidence=0.5)
-    eng = RuleEngine(cfg, {})
-    calib = Calibration(5.0)
-    votes = []
-    vw, vt = cfg["yolo"]["vote_window"], cfg["yolo"]["vote_threshold"]
-    stride = max(1, round(fps / cfg["yolo"]["target_fps"]))
+        raise ValueError(f"Нет видеофайла: {video}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.
+    yc,fc = cfg["yolo"],cfg["face"]
+    yolo = DetectorYolo(yc["model"],yc["imgsz"],yc["conf_phone"],yc["conf_person"],
+                        offline=True,adaptive=False,phone_class=yc["phone_class"],person_class=yc["person_class"])
+    face = FaceMeshThread(fc["max_faces"],max_width=fc.get("max_width",640),
+                          min_detection_confidence=fc["min_detection_confidence"],
+                          min_tracking_confidence=fc["min_tracking_confidence"])
+    latest = {"yolo":None}
+    hands = HandsThread(lambda:latest["yolo"]) if fc.get("hands_enabled",True) else None
+    workers = [yolo,face]+([hands] if hands else [])
+    eng = RuleEngine(cfg,{})
+    seconds = cfg["calibration"]["duration_sec"] if calibration_mode == "five" else (5. if calibration_mode == "center" else 0.)
+    calib = Calibration(seconds or 20.)
     base = time.monotonic()
-    calib_until = 5.0
-    fired = []
-    i = 0
-    while True:
-        ok, fr = cap.read()
-        if not ok:
-            break
-        t = i / fps
-        i += 1
-        h, w = fr.shape[:2]
-        res = mesh.process(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB))
-        faces = res.multi_face_landmarks or []
-        if faces:
-            lm = faces[0]
-            pts = np.array([(p.x * w, p.y * h) for p in lm.landmark])
-            yaw, pitch = head_pose(pts, w, h)
-            ih, iv = iris(pts)
-            xs, ys = pts[:, 0], pts[:, 1]
-            box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
-        else:
-            yaw = pitch = 0.0
-            ih, iv, box = 0.5, 0.5, None
-        g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-        f = FaceResult(n_faces=len(faces), yaw=yaw, pitch=pitch, iris_h=ih, iris_v=iv,
-                       face_box=box, brightness=float(g.mean()), variance=float(g.var()))
-        phones, persons = [], 0
-        if i % stride == 0:
-            r = yolo.predict(fr, imgsz=cfg["yolo"]["imgsz"], verbose=False)[0]
-            for b in r.boxes:
-                cls, conf = int(b.cls[0]), float(b.conf[0])
-                if cls == cfg["yolo"]["phone_class"] and conf >= cfg["yolo"]["conf_phone"]:
-                    x1, y1, x2, y2 = map(int, b.xyxy[0].tolist())
-                    phones.append(Box(conf, x1, y1, x2, y2))
-                elif cls == cfg["yolo"]["person_class"] and conf >= cfg["yolo"]["conf_person"]:
-                    persons += 1
-            votes.append(1 if phones else 0)
-            votes = votes[-vw:]
-        eng.on_face(f)
-        eng.on_yolo(YoloResult(phones=phones, n_persons=persons), sum(votes) >= vt)
-        if t <= calib_until and faces:
-            calib.add(yaw, pitch, ih, iv)
-        elif t > calib_until and not eng.calib.get("yaw_mad"):
-            eng.calib = calib.finish()
-        for vtype in eng.tick(base + t):
-            fired.append({"type": vtype, "t": round(t, 2)})
-    cap.release()
+    calib.start(base)
+    next_yolo = next_face = next_hands = 0.
+    calibrated = calibration_mode == "none"
+    fired,i = [],0
+    try:
+        for w in workers:
+            w.setup()
+        while True:
+            ok,fr = cap.read()
+            if not ok:
+                break
+            t = i/fps
+            packet = FramePacket(i,base+t,fr,t)
+            i += 1
+            if t >= next_yolo:
+                latest["yolo"] = yolo.process(packet)
+                eng.on_yolo(latest["yolo"])
+                next_yolo = t+1/yc["target_fps"]
+            if t >= next_face:
+                f = face.process(packet)
+                eng.on_face(f)
+                next_face = t+1/fc.get("target_fps",15)
+                if not calibrated and t < seconds and f.n_faces == 1 and f.pose_valid and f.gaze_valid:
+                    if calibration_mode == "five":
+                        calib.add(f.yaw,f.pitch,f.iris_h,f.iris_v,now=base+t)
+                    elif t >= .7:
+                        calib.add(f.yaw,f.pitch,f.iris_h,f.iris_v,pose="CENTER")
+            if hands and t >= next_hands:
+                eng.on_hands(hands.process(packet))
+                next_hands = t+1/fc.get("hands_fps",5)
+            if not calibrated and t >= seconds:
+                eng.calib = calib.finish(center_only=calibration_mode == "center")
+                if calibration_mode == "five" and eng.calib["unresolved_targets"]:
+                    raise ValueError("Не измерены позы калибровки: "+str(eng.calib["unresolved_targets"]))
+                eng.reset()
+                calibrated = True
+            if calibrated:
+                for kind in eng.tick(base+t):
+                    fired.append({"type":kind,"t":round(t,2)})
+        if not calibrated:
+            raise ValueError("Видео короче калибровки или калибровка не пройдена")
+    finally:
+        cap.release()
+        for w in workers:
+            w.teardown()
     return fired
 
 
@@ -131,7 +100,8 @@ def match(fired, gt):
     out = {}
     tp_total = 0
     f1w = 0.0
-    for t, items in by_type.items():
+    for t in sorted(set(by_type) | set(det_by_type)):
+        items = by_type.get(t, [])
         dets = sorted(det_by_type.get(t, []), key=lambda d: d["t"])
         matched = set()
         lat = []
@@ -165,15 +135,16 @@ def main():
     ap.add_argument("--output", required=True)
     ap.add_argument("--config", default=None)
     ap.add_argument("--profile", default="dev", choices=("dev", "exam"))
+    ap.add_argument("--calibration", choices=("five", "center", "none"), default="five")
     a = ap.parse_args()
     try:
         cfg = load_config(a.config, a.profile)
     except ConfigError as e:
         raise SystemExit(str(e))
     gt = json.load(open(a.gt, encoding="utf-8"))
-    fired = run(a.video, cfg)
+    fired = run(a.video, cfg, a.calibration)
     metrics = match(fired, gt)
-    json.dump({"detections": fired, "metrics": metrics}, open(a.output, "w", encoding="utf-8"),
+    json.dump({"detections": fired, "metrics": metrics, "calibration": a.calibration}, open(a.output, "w", encoding="utf-8"),
               ensure_ascii=False, indent=1)
     print(json.dumps(metrics, ensure_ascii=False, indent=1))
 

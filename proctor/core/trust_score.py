@@ -38,7 +38,7 @@ class TrustCalculator:
             if e["total_loss"] > 0:
                 parts.append(f"-{e['total_loss']:.0f} {labels.get(t, t)}")
         return {
-            "trust_score": round(self.score),
+            "trust_score": round(self.score, 1),
             "by_type": {k: {"count": v["count"], "total_loss": round(v["total_loss"], 1),
                             "weight": v["weight"]} for k, v in self.by_type.items()},
             "breakdown_text": ", ".join(parts),

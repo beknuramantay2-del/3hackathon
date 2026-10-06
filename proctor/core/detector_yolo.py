@@ -1,75 +1,64 @@
-"""YOLO thread ~8 FPS, imgsz 320-416, queue 1. Classes: person(0), cell phone(67)."""
+"""Local nano-YOLO with class filtering and small two-stage IoU tracking."""
+import os
 import time
-from collections import deque
-from PyQt6.QtCore import QThread, pyqtSignal
-
+from .worker import LatestWorker
 from .models import YoloResult, Box
+from .tracking import LiteTracker
 
-class DetectorYolo(QThread):
-    result_ready = pyqtSignal(object)
-
-    def __init__(self, model_name="yolov8n.pt", imgsz=384, conf_phone=0.35,
-                 conf_person=0.5, vote_window=8, vote_threshold=4, parent=None):
-        super().__init__(parent)
-        self.model_name = model_name
-        self.imgsz = imgsz
-        self.conf_phone = conf_phone
-        self.conf_person = conf_person
-        self.vote_window = vote_window
-        self.vote_threshold = vote_threshold
-        self._run = True
-        self._frame = None
-        self._votes = deque(maxlen=vote_window)
+class DetectorYolo(LatestWorker):
+    def __init__(self, model_name="yolov8n.pt", imgsz=384, conf_phone=.35,
+                 conf_person=.5, vote_window=8, vote_threshold=4, parent=None,
+                 target_fps=8, device="auto", threads=2, offline=True, adaptive=True,
+                 phone_class=67, person_class=0):
+        super().__init__(target_fps,parent,adaptive)
+        self.model_name,self.imgsz = model_name,imgsz
+        self.conf_phone,self.conf_person = conf_phone,conf_person
+        self.PHONE,self.PERSON = phone_class,person_class
+        self.device,self.threads,self.offline = device,threads,offline
+        self.budget.imgsz = imgsz
+        # Frame-voting parameters retained for API compatibility. Time-based HoldRule
+        # and confirmed tracks replace variable-FPS vote windows.
+        self.tracker = LiteTracker(strong=conf_phone)
         self.model = None
-        self.PERSON = 0
-        self.PHONE = 67
 
-    def push(self, frame):
-        self._frame = frame  # queue size 1: old dropped
+    def setup(self):
+        if self.offline and not os.path.isfile(self.model_name):
+            raise FileNotFoundError(f"Нет локальных весов: {self.model_name}. Запустите tools/fetch_weights.py заранее")
+        import torch
+        torch.set_num_threads(self.threads)
+        if self.device == "auto":
+            self.device = "0" if torch.cuda.is_available() else "cpu"
+        from ultralytics import YOLO
+        self.model = YOLO(self.model_name)
+        import numpy as np
+        self.model.predict(np.zeros((320,320,3),dtype=np.uint8), imgsz=self.budget.imgsz,
+                           classes=[self.PHONE,self.PERSON], device=self.device, verbose=False)
 
-    def run(self):
-        try:
-            from ultralytics import YOLO
-            self.model = YOLO(self.model_name)
-        except Exception as e:
-            print(f"[YOLO] cannot load {self.model_name}: {e}, mock mode")
-            self.model = None
-        import time as t
-        last = 0
-        while self._run:
-            if self._frame is None:
-                self.msleep(20)
-                continue
-            now = t.time()
-            if now - last < 1.0 / 8:  # ~8 FPS
-                self.msleep(10)
-                continue
-            last = now
-            frame = self._frame
-            if self.model is None:
-                self._votes.append(0)
-                self.result_ready.emit(YoloResult(phones=[], n_persons=0))
-                continue
-            try:
-                r = self.model.predict(frame, imgsz=self.imgsz, verbose=False)[0]
-                phones, persons = [], 0
-                for b in r.boxes:
-                    cls = int(b.cls[0]); conf = float(b.conf[0])
-                    if cls == self.PHONE and conf >= self.conf_phone:
-                        x1, y1, x2, y2 = map(int, b.xyxy[0].tolist())
-                        phones.append(Box(conf, x1, y1, x2, y2))
-                    elif cls == self.PERSON and conf >= self.conf_person:
-                        persons += 1
-                self._votes.append(1 if phones else 0)
-                self.result_ready.emit(YoloResult(phones=phones, n_persons=persons))
-            except Exception as e:
-                print("[YOLO] infer error:", e)
-                self.msleep(200)
+    def process(self, packet):
+        start = time.perf_counter()
+        r = self.model.predict(packet.frame,imgsz=self.budget.imgsz,conf=max(.1,self.conf_phone*.5),
+                               classes=[self.PHONE,self.PERSON],device=self.device,
+                               max_det=12,verbose=False)[0]
+        inferred = time.perf_counter()
+        phones,persons = [],[]
+        if r.boxes is not None:
+            # Transfer all boxes once instead of repeated tensor synchronizations.
+            data = r.boxes.data.cpu().numpy()
+            for row in data:
+                x1,y1,x2,y2,confidence,cls = row[:6]
+                b = Box(float(confidence),*map(int,(x1,y1,x2,y2)))
+                if int(cls) == self.PHONE:
+                    phones.append(b)
+                elif int(cls) == self.PERSON and confidence >= self.conf_person:
+                    persons.append(b)
+        tracking_started = time.perf_counter()
+        tracks = self.tracker.update(phones,packet.captured_at)
+        ended = time.perf_counter()
+        voted = any(b.confirmed and b.observed and b.conf >= self.conf_phone for b in tracks)
+        return YoloResult(phones=tracks,n_persons=len(persons),persons=persons,phone_voted=voted,
+                          seq=packet.seq,captured_at=packet.captured_at,processed_at=time.monotonic(),
+                          timings={"yolo":inferred-start,"postprocess":tracking_started-inferred,"tracker":ended-tracking_started})
 
-    def stop(self):
-        self._run = False
-        self.wait(1000)
-
-    def phone_voted(self) -> bool:
-        """phone in >= vote_threshold of last vote_window frames."""
-        return sum(self._votes) >= self.vote_threshold
+    def phone_voted(self):
+        result = self.output.peek()
+        return bool(result and result.phone_voted)

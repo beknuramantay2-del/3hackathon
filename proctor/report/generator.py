@@ -1,5 +1,6 @@
 """Строгие страницы: examiner (live, refresh 1с) и report.html. Только встроенный CSS, без внешних ресурсов."""
 import os
+from html import escape
 from types import SimpleNamespace
 from proctor.core.strings import load_strings
 
@@ -20,10 +21,12 @@ def _mmss(ts, t0):
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
-def _rows(store):
+def _rows(store, out_path):
     out = []
     for typ, sev, ts, dur, shot, det in store.all():
-        thumb = (f'<img class="thumb" src="{shot}" alt="Кадр">'
+        typ = escape(typ)
+        relative = escape(os.path.relpath(shot, os.path.dirname(out_path) or "."), quote=True) if shot else ""
+        thumb = (f'<img class="thumb" src="{relative}" alt="Кадр">'
                  if shot and os.path.exists(shot) else T["no_frame"])
         out.append((_mmss(ts, store.t0), typ, f"{dur:.0f} с", thumb))
     return out
@@ -37,7 +40,7 @@ def _table(rows, mark_latest=False):
     if not items:
         items = f'<tr><td colspan="4">{T["no_violations"]}</td></tr>'
     return (f"<table><tr><th>{T['th_time']}</th><th>{T['th_type']}</th><th>{T['th_duration']}</th>"
-            f"<th>{T['th_shot']}</th></tr>{items}")
+            f"<th>{T['th_shot']}</th></tr>{items}</table>")
 
 
 def _write(path, body):
@@ -48,13 +51,14 @@ def _write(path, body):
 
 def generate(store, cfg, out_path, fps=0, duration=0, fio="", trust=None):
     from proctor.core.trust_score import TrustCalculator
-    rows = _rows(store)
+    rows = _rows(store, out_path)
     if trust is None:
         calc = TrustCalculator(cfg.get("trust_weights", {}))
         for typ, sev, ts, dur, shot, det in store.all():
             v = SimpleNamespace(type=typ, severity=sev, t_start=ts)
             calc.apply_violation(v)
         trust = calc.get_score((T.get("trust_labels") or {}))
+    fio = escape(fio)
     score = trust["trust_score"]
     breakdown = f"<p>{trust['breakdown_text']}</p>" if trust["breakdown_text"] else ""
     chain_line = ""
