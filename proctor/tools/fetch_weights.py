@@ -1,7 +1,9 @@
 """Скачать веса YOLO в репо для офлайн-демо (интернета на площадке может не быть)."""
 import os
+from pathlib import Path
 
 def main():
+    os.chdir(Path(__file__).resolve().parents[2])
     os.makedirs("proctor/weights", exist_ok=True)
     try:
         from ultralytics import YOLO
@@ -18,6 +20,7 @@ def main():
     except Exception as e:
         print(f"[weights] не скачалось: {e}")
         print("Скачайте вручную: https://github.com/ultralytics/assets/releases и положите в proctor/weights/")
+        raise SystemExit(2)
 
 if __name__ == "__main__":
     main()

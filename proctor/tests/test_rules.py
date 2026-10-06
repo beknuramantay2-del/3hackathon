@@ -16,7 +16,7 @@ def test_gap_tolerance():
     r = HoldRule(hold=1.0, cooldown=0.0, gap_tolerance=0.3)
     t0 = 200.0
     assert not r.update(True, t0)
-    assert not r.update(False, t0 + 0.5)  # разрыв 0.1 < gap
+    assert not r.update(False, t0 + 0.95)  # разрыв 0.15 < gap
     assert r.update(True, t0 + 1.1)
 
 def test_gap_resets():

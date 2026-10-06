@@ -10,6 +10,8 @@ class HotkeyGuard:
         self.on_exit = on_exit
         self.enabled = enabled
         self.kb = None
+        self.status = "disabled"
+        self.errors = []
         self.monitor_only = not FULL_GUARD
 
     def block_keys(self):
@@ -22,24 +24,33 @@ class HotkeyGuard:
 
     def start(self):
         if not self.enabled:
-            return
+            self.status = "disabled"
+            return False
         if self.monitor_only:
             print(f"[hotkey] {OS}: режим мониторинга, suppress недоступен.")
-            return
+            self.status = "monitor-only"
+            return False
         try:
             import keyboard
             self.kb = keyboard
+            self.errors = []
             skip = (self.emergency or "").strip().lower()
             for hk in self.hotkeys:
-                if hk.strip().lower() == skip:
+                if hk.strip().lower() == skip or hk.strip().lower() == skip.split("+")[-1]:
                     continue
                 try:
                     keyboard.add_hotkey(hk, lambda h=hk: self._cb(h), suppress=True)
                 except Exception as e:
+                    self.errors.append(f"{hk}: {e}")
                     print(f"[hotkey] {hk}: {e}")
             keyboard.add_hotkey(self.emergency, self._exit)
+            self.status = "partial" if self.errors else "active"
+            return not self.errors
         except Exception as e:
+            self.status = "error"
+            self.errors.append(str(e))
             print("[hotkey] disabled:", e)
+            return False
 
     def _cb(self, hk):
         if self.on_block:

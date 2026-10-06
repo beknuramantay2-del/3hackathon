@@ -30,7 +30,7 @@ class ProcWatch(QThread):
                         name = (p.info["name"] or "").lower()
                         if p.info["pid"] in self.base:
                             continue
-                        if any(b in name for b in self.black):
+                        if name.removesuffix(".exe") in self.black:
                             self.found.emit(f"{p.info['name']} (pid {p.info['pid']})")
                             if self.mode == "close":
                                 try:

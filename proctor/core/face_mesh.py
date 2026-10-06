@@ -1,94 +1,130 @@
-"""FaceMesh: faces, head pose (solvePnP), iris. Mirror only for preview."""
+"""Low-rate full-frame face scan + primary-face ROI mesh/iris, with frame-space outputs."""
+import time
 import cv2
 import numpy as np
-from PyQt6.QtCore import QThread, pyqtSignal
+from .worker import LatestWorker
 from .models import FaceResult
 from .camera import CameraThread
+from .geometry import head_pose,eye_gaze,TimeEMA
+from .tracking import iou
 
-# solvePnP pairs: (mesh idx -> 3d model)
-_PNP_IDX = [1, 152, 33, 263, 61, 291]
-_MODEL_3D = np.array([
-    (0, 0, 0), (-165, -170, -135), (165, -170, -135),
-    (-150, -150, -125), (150, -150, -125),
-    (0, -330, -65),
-], dtype=np.float64)
+class FaceMeshThread(LatestWorker):
+    def __init__(self,max_faces=2,parent=None,target_fps=15,max_width=640,
+                 min_detection_confidence=.6,min_tracking_confidence=.6,adaptive=True):
+        super().__init__(target_fps,parent,adaptive)
+        self.max_faces,self.max_width=max_faces,max_width
+        self.detection_conf,self.tracking_conf=min_detection_confidence,min_tracking_confidence
+        self.mesh=self.detector=None
+        self.box_filter=TimeEMA(.04)
+        self.pose_filter,self.left_filter,self.right_filter=TimeEMA(.06),TimeEMA(.04),TimeEMA(.04)
+        self.primary=None
+        self.last_face_at=0.
+        self.next_scan=0.
+        self.boxes=[]
+        self.scanned_at=0.
 
-class FaceMeshThread(QThread):
-    result_ready = pyqtSignal(object)
+    def setup(self):
+        import mediapipe as mp
+        if not hasattr(mp,"solutions"):
+            raise RuntimeError("Нужен MediaPipe 0.10.14–0.10.21 / Python 3.10–3.11")
+        self.detector=mp.solutions.face_detection.FaceDetection(model_selection=0,
+            min_detection_confidence=self.detection_conf)
+        self.mesh=mp.solutions.face_mesh.FaceMesh(max_num_faces=1,refine_landmarks=True,
+            min_detection_confidence=self.detection_conf,min_tracking_confidence=self.tracking_conf)
 
-    def __init__(self, max_faces=2, parent=None):
-        super().__init__(parent)
-        self.max_faces = max_faces
-        self._run = True
-        self._frame = None
-        self.mesh = None
+    def teardown(self):
+        for model in (self.mesh,self.detector):
+            if model:
+                model.close()
 
-    def push(self, frame):
-        self._frame = frame
-
-    def run(self):
-        try:
-            import mediapipe as mp
-            self.mesh = mp.solutions.face_mesh.FaceMesh(
-                max_num_faces=self.max_faces, refine_landmarks=True,
-                min_detection_confidence=0.5, min_tracking_confidence=0.5)
-        except Exception as e:
-            print("[FaceMesh] init fail:", e)
-            self.mesh = None
-        while self._run:
-            if self._frame is None:
-                self.msleep(15)
-                continue
-            frame = self._frame
-            h, w = frame.shape[:2]
-            bright, var = CameraThread.brightness_variance(frame)
-            if self.mesh is None:
-                self.result_ready.emit(FaceResult(brightness=bright, variance=var))
-                self.msleep(50)
-                continue
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            res = self.mesh.process(rgb)
-            if not res.multi_face_landmarks:
-                self.result_ready.emit(FaceResult(brightness=bright, variance=var))
-                continue
-            lm = res.multi_face_landmarks[0]
-            pts = np.array([(p.x * w, p.y * h) for p in lm.landmark])
-            # head pose
-            img_pts = np.array([(pts[i][0], pts[i][1]) for i in _PNP_IDX], dtype=np.float64)
-            focal = w
-            cam = np.array([[focal, 0, w / 2], [0, focal, h / 2], [0, 0, 1]], dtype=np.float64)
-            dist = np.zeros((4, 1))
-            try:
-                _, rvec, tvec = cv2.solvePnP(_MODEL_3D, img_pts, cam, dist)
-                rmat, _ = cv2.Rodrigues(rvec)
-                import math
-                yaw = math.degrees(math.atan2(rmat[1, 0], rmat[0, 0]))
-                pitch = math.degrees(math.atan2(-rmat[2, 0], (rmat[2, 1]**2 + rmat[2, 2]**2) ** 0.5))
-                roll = math.degrees(math.atan2(rmat[2, 1], rmat[2, 2]))
-            except Exception:
-                yaw = pitch = roll = 0.0
-            # iris: refine landmarks 468-477; horizontal vs eye corners
-            try:
-                iris = pts[468:478].mean(axis=0)
-                # left eye 33-133, right 362-263 -> use dominant (larger) eye
-                def ratio(c_out, c_in):
-                    d = abs(pts[c_in][0] - pts[c_out][0]) + 1e-6
-                    return (iris[0] - pts[c_out][0]) / d
-                iris_h = (ratio(33, 133) + ratio(362, 263)) / 2
-                iris_h = float(np.clip(iris_h, 0, 1))
-                top = (pts[159][1] + pts[386][1]) / 2
-                bot = (pts[145][1] + pts[374][1]) / 2
-                iris_v = float(np.clip((iris[1] - top) / (bot - top + 1e-6), 0, 1))
-            except Exception:
-                iris_h, iris_v = 0.5, 0.5
-            xs, ys = pts[:, 0], pts[:, 1]
-            box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
-            self.result_ready.emit(FaceResult(
-                n_faces=len(res.multi_face_landmarks),
-                yaw=yaw, pitch=pitch, roll=roll,
-                iris_h=iris_h, iris_v=iris_v, face_box=box,
-                brightness=bright, variance=var))
-
-    def stop(self):
-        self._run = False
-        self.wait(1000)
+    def process(self,packet):
+        frame=packet.frame
+        h,w=frame.shape[:2]
+        now=packet.captured_at
+        brightness,variance=CameraThread.brightness_variance(frame)
+        start=time.perf_counter()
+        if now>=self.next_scan:
+            scale=min(1.,self.max_width/w)
+            small=frame if scale==1 else cv2.resize(frame,(int(w*scale),int(h*scale)))
+            detections=self.detector.process(cv2.cvtColor(small,cv2.COLOR_BGR2RGB)).detections or []
+            boxes=[]
+            for detection in detections:
+                b=detection.location_data.relative_bounding_box
+                x1,y1=max(0,int(b.xmin*w)),max(0,int(b.ymin*h))
+                x2,y2=min(w,int((b.xmin+b.width)*w)),min(h,int((b.ymin+b.height)*h))
+                if x2-x1>=30 and y2-y1>=30:
+                    boxes.append((x1,y1,x2,y2))
+            self.boxes=boxes[:self.max_faces]
+            self.scanned_at=now
+            self.next_scan=now+.2
+        scan_end=time.perf_counter()
+        visible=self.boxes if now-self.scanned_at<=.45 else []
+        if visible:
+            selected=max(visible,key=lambda b:iou(self.primary,b)) if self.primary and now-self.last_face_at<.7 else max(visible,key=lambda b:(b[2]-b[0])*(b[3]-b[1]))
+        else:
+            selected=self.primary if self.primary and now-self.last_face_at<.4 else None
+        result=FaceResult(n_faces=0,brightness=brightness,variance=variance,seq=packet.seq,
+            captured_at=now,pose_valid=False,gaze_valid=False,timings={"face_scan":scan_end-start})
+        if selected is None:
+            result.gaze_reason=result.pose_reason="Лицо не найдено; камера/свет/ракурс"
+            result.processed_at=time.monotonic()
+            return result
+        changed=self.primary is not None and iou(self.primary,selected)<.1
+        if changed or now-self.last_face_at>.7:
+            for f in (self.pose_filter,self.left_filter,self.right_filter,self.box_filter):
+                f.reset()
+        x1,y1,x2,y2=selected
+        bw,bh=x2-x1,y2-y1
+        rx1,ry1=max(0,int(x1-bw*.25)),max(0,int(y1-bh*.35))
+        rx2,ry2=min(w,int(x2+bw*.25)),min(h,int(y2+bh*.30))
+        roi=frame[ry1:ry2,rx1:rx2]
+        if roi.size==0:
+            result.pose_reason=result.gaze_reason="Пустая ROI лица"
+            result.processed_at=time.monotonic()
+            return result
+        rgb=cv2.cvtColor(roi,cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable=False
+        mesh_result=self.mesh.process(rgb)
+        mesh_end=time.perf_counter()
+        result.timings["mediapipe"]=mesh_end-scan_end
+        if not mesh_result.multi_face_landmarks:
+            result.pose_reason=result.gaze_reason="FaceMesh потерял landmarks; направление неизвестно"
+            result.n_faces=len(visible)  # face scan is presence evidence, not valid gaze evidence
+            result.face_boxes=list(visible)
+            result.processed_at=time.monotonic()
+            return result
+        lm=mesh_result.multi_face_landmarks[0].landmark
+        pts=np.array([(p.x*(rx2-rx1)+rx1,p.y*(ry2-ry1)+ry1) for p in lm])
+        box=(max(0,int(pts[:,0].min())),max(0,int(pts[:,1].min())),
+             min(w,int(pts[:,0].max())),min(h,int(pts[:,1].max())))
+        self.primary=box
+        self.last_face_at=now
+        result.face_box=tuple(map(int,self.box_filter.update(box,now)))
+        # Exclude only the scan box corresponding to this primary; keep every second face.
+        result.face_boxes=[result.face_box]+[b for b in visible if iou(selected,b)<.45]
+        result.n_faces=len(result.face_boxes)
+        result.primary_changed=changed
+        s=time.perf_counter()
+        pose=head_pose(pts,w,h)
+        if pose is not None:
+            result.yaw,result.pitch,result.roll=self.pose_filter.update(pose,now)
+            result.pose_valid=True
+        else:
+            result.pose_reason="PnP: плохая геометрия/ракурс, превышен reprojection gate"
+        result.timings["head_pose"]=time.perf_counter()-s
+        s=time.perf_counter()
+        xyz=np.array([(p.x*(rx2-rx1)+rx1,p.y*(ry2-ry1)+ry1,p.z*(rx2-rx1)) for p in lm])
+        left,right,gaze=eye_gaze(pts,xyz)
+        result.left_eye=self.left_filter.update(left,now) if left is not None else None
+        result.right_eye=self.right_filter.update(right,now) if right is not None else None
+        valid=[e for e in (result.left_eye,result.right_eye) if e is not None]
+        if gaze is not None and valid:
+            result.iris_h,result.iris_v=map(float,np.mean(valid,axis=0))
+            result.gaze_valid=True
+            result.gaze_reason="Оба глаза" if len(valid)==2 else "Один глаз; ограниченная надёжность"
+        else:
+            result.gaze_reason="Зрачки не читаются: моргание/малые глаза/перекрытие или несогласие глаз"
+        result.eye_points=[tuple(map(int,pts[i])) for i in (468,473)] if len(pts)>473 else []
+        result.timings["eye_gaze"]=time.perf_counter()-s
+        result.processed_at=time.monotonic()
+        return result

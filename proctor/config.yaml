@@ -3,9 +3,9 @@
 profile: dev
 
 test:
-  # URL теста. По умолчанию заглушка dev/ для запуска без настройки.
+  # Только для --embedded-test: реальная страница экзамена, по умолчанию отключено.
   # Пустой test_url в exam блокирует старт.
-  test_url: proctor/dev/stub.html
+  test_url: ""
   # Белый список доменов. Пустой список означает: разрешен только хост test_url.
   allowed_domains: []
 
@@ -21,12 +21,15 @@ camera:
 
 yolo:
   # Путь к весам. Для офлайн-демо: python proctor/tools/fetch_weights.py
-  model: yolov8n.pt
-  imgsz: 384
+  model: proctor/weights/yolov8n.pt
+  imgsz: 640
   # Порог уверенности для телефона (COCO cell phone, класс 67).
-  conf_phone: 0.35
+  conf_phone: 0.25
   conf_person: 0.5
   target_fps: 8
+  detail_search: true
+  device: auto
+  offline: true
   phone_class: 67
   person_class: 0
   # Телефон считается найденным, если виден не менее vote_threshold
@@ -36,13 +39,17 @@ yolo:
 
 face:
   max_faces: 2
+  target_fps: 15
+  max_width: 640
+  hands_enabled: true
+  hands_fps: 5
   refine_landmarks: true
   min_detection_confidence: 0.5
   min_tracking_confidence: 0.5
 
 calibration:
-  # Длительность калибровки взгляда в секундах.
-  duration_sec: 5.0
+  # 5 поз взгляда по 4 с, переходы и выбросы исключаются.
+  duration_sec: 20.0
 
 # Проверка камеры на старте. Эвристика по имени устройства, не гарантия.
 # Неизвестное имя не блокирует.
@@ -85,7 +92,7 @@ rules:
   gaze_side:
     enabled: true
     yaw_thresh: 18.0
-    iris_thresh: 0.28
+    iris_thresh: 0.10
     hold: 2.0
     cooldown: 5.0
   no_face:
@@ -114,6 +121,11 @@ trust_weights:
   GAZE_DOWN: 5
   GAZE_LEFT: 3
   GAZE_RIGHT: 3
+  GAZE_UP: 3
+  HEAD_LEFT: 3
+  HEAD_RIGHT: 3
+  HEAD_UP: 3
+  HEAD_DOWN: 5
   NO_FACE: 30
   MULTI_FACE: 20
   HOTKEY_BLOCKED: 8
@@ -168,6 +180,11 @@ guard:
     salt_hex: ""
     hash_hex: ""
     iterations: 100000
+
+performance:
+  mode: auto  # auto / weak / balanced
+  adaptive: true
+  threads: 2
 
 store:
   db: data/session.db

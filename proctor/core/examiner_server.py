@@ -2,6 +2,9 @@
 import os
 import sqlite3
 import threading
+import secrets
+from html import escape
+from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
 
@@ -30,6 +33,7 @@ class ExaminerServer:
         self.get_fio = get_fio
         self.get_status = get_status
         self.finish_requested = threading.Event()
+        self.csrf = secrets.token_urlsafe(32)
         self._server = None
         self._thread = None
 
@@ -56,6 +60,7 @@ class ExaminerServer:
         trust = self._trust(rows, t0)
         items = ""
         for i, (typ, sev, ts, dur, shot) in enumerate(rows):
+            typ = escape(typ)
             s = max(0, int(ts - t0))
             mmss = f"{s // 60:02d}:{s % 60:02d}"
             base = os.path.basename(shot or "")
@@ -68,11 +73,11 @@ class ExaminerServer:
             items = f'<tr><td colspan="4">{T["no_violations"]}</td></tr>'
         table = (f"<table><tr><th>{T['th_time']}</th><th>{T['th_type']}</th>"
                  f"<th>{T['th_duration']}</th><th>{T['th_shot']}</th></tr>{items}</table>")
-        head = (f'<div class="panel"><h1>{T["examiner_title"]}: {self.get_fio() or T["student"]}</h1>'
+        head = (f'<div class="panel"><h1>{T["examiner_title"]}: {escape(self.get_fio() or T["student"])}</h1>'
                 f"<p>{T['violations']}: <b>{len(rows)}</b></p>"
-                f"<p>{T['session_status']}: {self.get_status()}</p>"
+                f"<p>{T['session_status']}: {escape(self.get_status())}</p>"
                 f"<p>{T['trust_score']}: {trust['trust_score']}/100.</p>"
-                f'<form method="post" action="/finish"><button type="submit">{T["examiner_finish"]}</button></form></div>')
+                f'<form method="post" action="/finish"><input type="hidden" name="csrf" value="{self.csrf}"><button type="submit">{T["examiner_finish"]}</button></form></div>')
         return (f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
                 f'<meta http-equiv="refresh" content="1">'
                 f"<title>{T['examiner_title']}</title><style>{CSS}</style></head>"
@@ -111,6 +116,15 @@ class ExaminerServer:
 
             def do_POST(self):
                 if urlparse(self.path).path == "/finish":
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 1024:
+                        self.send_error(403)
+                        return
+                    values = parse_qs(self.rfile.read(length).decode("utf-8", errors="replace"))
+                    token = values.get("csrf", [""])[0]
+                    if not secrets.compare_digest(token, server.csrf):
+                        self.send_error(403)
+                        return
                     server.finish_requested.set()
                     self.send_response(303)
                     self.send_header("Location", "/")
@@ -128,5 +142,6 @@ class ExaminerServer:
         try:
             if self._server:
                 self._server.shutdown()
+                self._server.server_close()
         except Exception:
             pass

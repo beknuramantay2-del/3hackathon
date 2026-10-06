@@ -24,6 +24,9 @@ class FocusWatch(QThread):
             return
         import win32gui
         while self._run:
+            if not self.enabled:
+                self.msleep(100)
+                continue
             try:
                 fg = win32gui.GetForegroundWindow()
                 mine = self.get_hwnd() if self.get_hwnd else None

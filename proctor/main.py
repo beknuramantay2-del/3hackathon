@@ -1,337 +1,434 @@
-"""main.py — one process, Qt signals only for widgets.
-Usage: python main.py [--no-guard] [--demo] [--video file.mp4]"""
-import sys, os, time, argparse, traceback
-import yaml
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+"""Case 3 MVP: camera -> latest-only workers -> fresh temporal rules -> Qt dashboard."""
+import os
+import sys
+import time
+import argparse
+import traceback
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 
-from PyQt6.QtWidgets import QApplication, QStackedWidget, QWidget, QVBoxLayout, QLabel, QPushButton
-from PyQt6.QtCore import QTimer
-
+from PyQt6.QtCore import QTimer,QObject,pyqtSignal,QLockFile,Qt
+from PyQt6.QtWidgets import (QApplication,QStackedWidget,QWidget,QVBoxLayout,QLabel,
+                            QPushButton,QInputDialog,QLineEdit,QSplashScreen)
+from PyQt6.QtGui import QPixmap
 from proctor.core.camera import CameraThread
+from proctor.core.overlay import render_overlay
 from proctor.core.detector_yolo import DetectorYolo
 from proctor.core.face_mesh import FaceMeshThread
-from proctor.core.calibration import Calibration
+from proctor.core.hands import HandsThread
+from proctor.core.calibration import Calibration,CalibrationError
 from proctor.core.rules import RuleEngine
-from proctor.core.events import EventBus, make_violation
-from proctor.core.store import Store
-from proctor.guard.hotkeys import HotkeyGuard
-from proctor.guard.focus import FocusWatch
-from proctor.guard.processes import ProcWatch
-from proctor.guard.displays import monitor_count
-from proctor.guard.clipboard import ClipboardGuard
-from proctor.core.preflight import check_camera
-from proctor.ui.screens import PreflightScreen, CalibrationView
-from proctor.ui.test_window import TestWindow
-from proctor.report.generator import generate
-
-from proctor.core.config import load_config, ensure_hash_salt, ConfigError
+from proctor.core.events import make_violation,SEVERITY
+from proctor.core.store import Store,EventWriter
+from proctor.core.pipeline import Timings,hardware_profile
+from proctor.core.config import load_config,ensure_hash_salt,ConfigError
 from proctor.core.strings import load_strings
 from proctor.core.trust_score import TrustCalculator
 from proctor.core.examiner_server import ExaminerServer
+from proctor.core.preflight import check_camera
+from proctor.guard.hotkeys import HotkeyGuard
+from proctor.guard.focus import FocusWatch
+from proctor.guard.processes import ProcWatch
+from proctor.guard.clipboard import ClipboardGuard
+from proctor.guard.displays import monitor_count
+from proctor.guard.security import verify_password,FULL_GUARD
+from proctor.ui.screens import PreflightScreen,CalibrationView,SidePanel
+from proctor.ui.test_window import TestWindow
+from proctor.report.generator import generate
 
-def load_cfg(profile=None):
-    return load_config(profile=profile)
+class UiBus(QObject):
+    violation = pyqtSignal(str,object)
+    exit_requested = pyqtSignal()
+
+class LockedStack(QStackedWidget):
+    locked = False
+    def closeEvent(self,event):
+        if self.locked:
+            event.ignore()
+        else:
+            super().closeEvent(event)
+
 
 def main():
+    if "--embedded-test" not in sys.argv:
+        from proctor.live import main as live_main
+        return live_main()
+    sys.argv.remove("--embedded-test")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--no-guard", action="store_true")
-    ap.add_argument("--demo", action="store_true", help="don't kill processes")
-    ap.add_argument("--video", default=None)
-    ap.add_argument("--debug", action="store_true", help="debug overlay: FPS/yaw/pitch/faces/phone conf")
-    ap.add_argument("--profile", default=None, choices=("dev", "exam"))
-    a = ap.parse_args()
+    ap.add_argument("--no-guard",action="store_true")
+    ap.add_argument("--demo",action="store_true",help="monitoring mode, never close processes")
+    ap.add_argument("--video")
+    ap.add_argument("--debug",action="store_true")
+    ap.add_argument("--profile",choices=("dev","exam"))
+    ap.add_argument("--config")
+    ap.add_argument("--perf",choices=("auto","weak","balanced"))
+    args = ap.parse_args()
+    # Stable relative paths regardless of current working directory.
+    os.chdir(Path(__file__).resolve().parent.parent)
     try:
-        cfg = load_cfg(a.profile)
+        cfg = load_config(args.config,args.profile)
+        if not cfg["_test_url"].strip():
+            raise ConfigError("Для --embedded-test задайте реальную страницу test.test_url. Заглушка теста отключена")
         texts = load_strings()
-    except (ConfigError, RuntimeError) as e:
-        print(e, file=sys.stderr)
-        raise SystemExit(2)
-    hc = cfg.get("hash_chain", {}) or {}
-    if hc.get("enabled") and not hc.get("salt_hex"):
-        try:
+        if cfg["hash_chain"]["enabled"] and not cfg["hash_chain"]["salt_hex"]:
             ensure_hash_salt(cfg)
-        except ConfigError as e:
-            print(e, file=sys.stderr)
-            raise SystemExit(2)
+        if cfg["profile"] == "exam":
+            import ctypes
+            if args.no_guard or args.demo or args.video or not FULL_GUARD or not ctypes.windll.shell32.IsUserAnAdmin():
+                raise ConfigError("exam требует Windows/admin, живую камеру и включенную защиту; для демо используйте dev")
+    except (ConfigError,RuntimeError) as e:
+        print(e,file=sys.stderr)
+        return 2
+    try:
+        from PyQt6.QtWebEngineWidgets import QWebEngineView  # validate before creating QApplication
+    except ImportError as e:
+        print(f"Не загружается WebEngine: {e}",file=sys.stderr)
+        return 2
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
-    try:
-        qss = os.path.join(os.path.dirname(__file__), "ui", "style.qss")
-        if os.path.exists("proctor/ui/style.qss"):
-            qss = "proctor/ui/style.qss"
-        with open(qss, encoding="utf-8") as f:
-            app.setStyleSheet(f.read())
-    except Exception as e:
-        print("[ui] style.qss:", e)
-    guard_on = not a.no_guard
-    fio = {"name": ""}
+    os.makedirs("data",exist_ok=True)
+    lock = QLockFile(os.path.abspath("data/proctor.lock"))
+    if not lock.tryLock(100):
+        print("Другой экземпляр прокторинга уже запущен",file=sys.stderr)
+        return 2
+    app.setStyleSheet(Path("proctor/ui/style.qss").read_text(encoding="utf-8"))
+    splash_pix = QPixmap(500,160)
+    splash_pix.fill(Qt.GlobalColor.black)
+    splash = QSplashScreen(splash_pix)
+    splash.showMessage("Локальный прокторинг · загрузка моделей…",Qt.AlignmentFlag.AlignCenter,Qt.GlobalColor.white)
+    splash.show()
+    app.processEvents()
 
-    _hc = cfg.get("hash_chain", {}) or {}
-    _salt = _hc.get("salt_hex", "") if _hc.get("enabled") else ""
-    store = Store(cfg["store"]["db"], cfg["store"]["shots"], salt=_salt)
-    bus = EventBus()
-    trust_calc = TrustCalculator(cfg["trust_weights"])
-    session = {"status": texts["examiner_active"], "done": False, "fio": fio["name"]}
-    try:
-        examiner = ExaminerServer(cfg["examiner"]["host"], cfg["examiner"]["port"],
-                                  cfg["store"]["db"], cfg["store"]["shots"],
-                                  cfg["trust_weights"],
-                                  lambda: session["fio"] or fio.get("name", ""),
-                                  lambda: session["status"])
-        url = examiner.start()
-        print(f"examiner panel: {url}")
-    except Exception as e:
-        examiner = None
-        print(f"examiner panel unavailable: {e}")
-    calib = Calibration(cfg["calibration"]["duration_sec"])
-    engine = RuleEngine(cfg, {})
-    calib_mode = {"on": False}
+    perf = cfg.get("performance",{})
+    profile = hardware_profile(args.perf or perf.get("mode","auto"))
+    adaptive = perf.get("adaptive",True)
+    import cv2
+    cv2.setNumThreads(1)  # avoid native thread-pool oversubscription
+    cam = CameraThread(width=cfg["camera"]["width"],height=cfg["camera"]["height"],
+                       fps=cfg["camera"]["fps"],video_file=args.video,index=cfg["camera"]["index"],parent=app)
+    yc,fc = cfg["yolo"],cfg["face"]
+    yolo = DetectorYolo(yc["model"],min(yc["imgsz"],profile["imgsz"]) if adaptive else yc["imgsz"],
+                        yc["conf_phone"],yc["conf_person"],parent=app,
+                        target_fps=min(yc["target_fps"],profile["yolo_fps"]) if adaptive else yc["target_fps"],
+                        device=yc.get("device","auto"),threads=min(int(perf.get("threads",2)),profile["threads"]),
+                        offline=yc.get("offline",True),adaptive=adaptive,
+                        phone_class=yc["phone_class"],person_class=yc["person_class"])
+    face = FaceMeshThread(fc["max_faces"],parent=app,
+                          target_fps=min(fc.get("target_fps",15),profile["face_fps"]) if adaptive else fc.get("target_fps",15),
+                          max_width=fc.get("max_width",640),min_detection_confidence=fc["min_detection_confidence"],
+                          min_tracking_confidence=fc["min_tracking_confidence"],adaptive=adaptive)
+    hands = HandsThread(yolo.output.peek,min(fc.get("hands_fps",5),profile["hands_fps"]),parent=app) if fc.get("hands_enabled",True) else None
+    workers = [yolo,face]+([hands] if hands else [])
+    for worker in workers:
+        cam.subscribe(worker.push)  # bounded pointer replacement, not queued Qt signals
+    run_id = time.strftime("%Y%m%d_%H%M%S")+f"_{os.getpid()}"
+    session_dir = Path(cfg["store"]["db"]).parent/"sessions"/run_id
+    store = Store(str(session_dir/"session.db"),str(session_dir/"shots"),
+                  cfg["hash_chain"]["salt_hex"] if cfg["hash_chain"]["enabled"] else "")
+    writer = EventWriter(store)
+    trust = TrustCalculator(cfg["trust_weights"])
+    engine = RuleEngine(cfg)
+    calibration = Calibration(cfg["calibration"]["duration_sec"])
+    metrics = Timings()
+    state = dict(active=False,calibrating=False,done=False,started=0.,fio="",status="Подготовка")
+    window = {"test":None}
+    stack = LockedStack()
+    stack.setWindowTitle("Case 3 · Локальный прокторинг")
+    stack.resize(1100,760)
+    last_events = {}
+    bridge = UiBus()
 
-    # threads
-    cam = CameraThread(width=cfg["camera"]["width"], height=cfg["camera"]["height"],
-                       video_file=a.video, index=cfg["camera"]["index"], parent=app)
-    yolo = DetectorYolo(cfg["yolo"]["model"], cfg["yolo"]["imgsz"],
-                        cfg["yolo"]["conf_phone"], cfg["yolo"]["conf_person"],
-                        cfg["yolo"]["vote_window"], cfg["yolo"]["vote_threshold"], parent=app)
-    face = FaceMeshThread(cfg["face"]["max_faces"], parent=app)
-
-    stack = QStackedWidget()
-    fps_hist = {"n": 0, "t0": time.time()}
-
-    # --- violation plumbing ---
-    test_win = {"w": None}
-    def emit_violation(vtype, details=None):
-        frame = cam.latest
-        shot = ""
-        if cfg["store"]["save_screenshots"] and frame is not None:
-            shot = store.save_frame(frame, vtype)
-        v = make_violation(vtype, 0.0, shot, details or {})
-        store.add(v)
-        trust_calc.apply_violation(v)
-        bus.emit(v)
-        if test_win["w"]:
-            test_win["w"].panel.set_status(f"{texts['watch_fixed']}: {vtype.split(':')[0]}")
-
-    def on_rule_types(types):
-        for t in types:
-            emit_violation(t, engine.debug)
-
-    # wire CV
-    latest_yolo_voted = {"v": False}
-    def on_frame(f):
-        yolo.push(f); face.push(f)
-        fps_hist["n"] += 1
-    def on_face_res(r):
-        engine.on_face(r)
-        if calib_mode["on"]:
-            calib.add(r.yaw, r.pitch, r.iris_h, r.iris_v)
-        if test_win["w"]:
-            # draw boxes
-            import cv2
-            fr = cam.latest
-            if fr is not None:
-                vis = fr.copy()
-                if r.face_box:
-                    x1, y1, x2, y2 = r.face_box
-                    cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                for p in engine.yolo.phones:
-                    cv2.rectangle(vis, (p.x1, p.y1), (p.x2, p.y2), (0, 0, 255), 2)
-                    cv2.putText(vis, f"phone {p.conf:.2f}", (p.x1, p.y1 - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                test_win["w"].panel.show_frame(vis)
-                test_win["w"].panel.set_debug(
-                    f"yaw {r.yaw:+.0f} pitch {r.pitch:+.0f} faces {r.n_faces} "
-                    f"phones {len(engine.yolo.phones)} bright {r.brightness:.0f}")
-    def on_yolo_res(res):
-        engine.on_yolo(res, yolo.phone_voted())
-
-    cam.frame_ready.connect(on_frame)
-    face.result_ready.connect(on_face_res)
-    yolo.result_ready.connect(on_yolo_res)
-
-    # rule tick 10 Hz
-    tick = QTimer()
-    tick.timeout.connect(lambda: on_rule_types(engine.tick()))
-    tick.start(100)
-
-    def poll_examiner():
-        if examiner is not None and examiner.finish_requested.is_set():
-            examiner.finish_requested.clear()
-            finish()
-    exam_tick = QTimer()
-    exam_tick.timeout.connect(poll_examiner)
-    exam_tick.start(500)
-
-    # --- guard ---
-    from PyQt6.QtCore import QObject as _QObject, pyqtSignal as _sig
-    from PyQt6.QtWidgets import QInputDialog, QLineEdit
-    from proctor.guard.security import verify_password
+    def emit_violation(vtype,details=None):
+        if not state["active"] or state["done"]:
+            return
+        vtype = vtype.split(":",1)[0]
+        if vtype not in SEVERITY:
+            return
+        now = time.monotonic()
+        event_gap = 5. if vtype in ("CAMERA_LOST","FOCUS_LOST","FORBIDDEN_PROCESS","SECOND_MONITOR") else 1.
+        if now-last_events.get(vtype,-1e9) < event_gap:
+            return
+        last_events[vtype] = now
+        duration = engine.debug.get("durations",{}).get(vtype,0.)
+        v = make_violation(vtype,duration,"",dict(details or {}))
+        shot = cam.latest if cfg["store"]["save_screenshots"] else None
+        if writer.submit(v,shot):
+            trust.apply_violation(v)
+            if window["test"]:
+                window["test"].panel.log(f"{time.strftime('%H:%M:%S')} · {vtype} · {duration:.1f}с")
+    bridge.violation.connect(emit_violation)
 
     def ask_password():
-        text, ok = QInputDialog.getText(stack, "Пароль", "Введите пароль экзаменатора:",
-                                        QLineEdit.EchoMode.Password)
-        if not ok or not text:
-            return False
-        ex = cfg["guard"]["examiner"]
-        return verify_password(text, ex["salt_hex"], ex["hash_hex"], ex["iterations"])
+        was_enabled = fw.enabled
+        fw.enabled = False
+        try:
+            text,ok = QInputDialog.getText(stack,"Выход экзаменатора","Пароль:",QLineEdit.EchoMode.Password)
+            ex = cfg["guard"]["examiner"]
+            return bool(ok and text and verify_password(text,ex["salt_hex"],ex["hash_hex"],ex["iterations"]))
+        finally:
+            fw.enabled = was_enabled
 
-    class ExitAsk(_QObject):
-        asked = _sig()
-    exit_ask = ExitAsk()
-    exit_ask.asked.connect(lambda: app.quit() if ask_password() else None)
-    hk = HotkeyGuard(cfg["guard"]["hotkeys"], cfg["guard"]["emergency_exit"],
-                     on_block=lambda h: emit_violation("HOTKEY_BLOCKED", {"key": h}),
-                     on_exit=lambda: exit_ask.asked.emit(),
-                     enabled=guard_on)
-    hk.start()
-    fw = FocusWatch(get_hwnd=lambda: int(test_win["w"].winId()) if test_win["w"] else None,
-                    enabled=guard_on and os.name == "nt")
-    fw.lost.connect(lambda: emit_violation("FOCUS_LOST"))
-    if guard_on:
-        try: fw.start()
-        except Exception: pass
-    pw = ProcWatch(cfg["guard"]["forbidden_processes"], cfg["guard"]["process_check_sec"],
-                   mode=cfg["guard"]["process_mode"] if not a.demo else "log")
-    if guard_on:
-        pw.found.connect(lambda s: emit_violation("FORBIDDEN_PROCESS", {"proc": s}))
-        pw.start()
-    cg = ClipboardGuard(app, cfg["guard"]["clipboard_clear_sec"],
-                        on_violation=lambda t: emit_violation(t), parent=app)
-    if guard_on:
-        cg.start()
+    def exit_requested():
+        if cfg["profile"] != "exam" or ask_password():
+            if state["active"]:
+                finish()
+            stack.locked = False
+            app.quit()
+    bridge.exit_requested.connect(exit_requested)
+    guard_on = not args.no_guard
+    hk = HotkeyGuard(cfg["guard"]["hotkeys"],cfg["guard"]["exit_combo"],
+                     on_block=lambda h:bridge.violation.emit("HOTKEY_BLOCKED",{"key":h}),
+                     on_exit=bridge.exit_requested.emit,enabled=guard_on)
+    # Never call QWidget.winId() from a watchdog worker.
+    hwnd = {"value":None}
+    fw = FocusWatch(lambda:hwnd["value"],enabled=guard_on and os.name == "nt",parent=app)
+    fw.lost.connect(lambda:emit_violation("FOCUS_LOST"))
+    pw = ProcWatch(cfg["guard"]["forbidden_processes"],cfg["guard"]["process_check_sec"],
+                   mode="log" if args.demo else cfg["guard"]["process_mode"],parent=app)
+    pw.found.connect(lambda name:emit_violation("FORBIDDEN_PROCESS",{"process":name}))
+    clipboard = ClipboardGuard(app,cfg["guard"]["clipboard_clear_sec"],emit_violation,parent=app)
+    try:
+        examiner = ExaminerServer(cfg["examiner"]["host"],cfg["examiner"]["port"],store.db,store.shots,
+                                  cfg["trust_weights"],lambda:state["fio"],lambda:state["status"])
+        print("Экзаменатор:",examiner.start())
+    except Exception as e:
+        examiner = None
+        print("Панель экзаменатора недоступна:",e)
+    camera_check = {"done":False,"name":"","blocked":False}
+    unlocked = {"monitors":False}
 
-    # --- screens ---
-    _mon_warned = {"v": False}
-    _unlocked = {"v": False}
-    _vc = {"done": False, "name": "", "blocked": False}
-    def preflight_checks():
-        n_mon = monitor_count()
-        out = [("Камера работает", cam.latest is not None),
-               ("В кадре одно лицо", engine.face.n_faces == 1),
-               ("Телефона нет", len(engine.yolo.phones) == 0),
-               (f"Мониторов: {n_mon} (нужен 1)", n_mon == 1 or _unlocked["v"])]
-        if not _vc["done"] and a.video is None:
-            _vc["done"] = True
-            name, blocked = check_camera(cfg["camera"]["index"],
-                                         cfg["preflight"]["virtual_keywords"],
-                                         cfg["preflight"]["virtual_check_enabled"])
-            _vc.update(name=name, blocked=blocked)
-        out.append((f"{texts['vc_label']}: {_vc['name'] or '?'}", not _vc["blocked"]))
-        if n_mon > 1 and not _mon_warned["v"]:
-            _mon_warned["v"] = True
-            emit_violation("SECOND_MONITOR", {"monitors": n_mon})
+    def checks():
+        packet = cam.output.peek()
+        fresh = packet is not None and time.monotonic()-packet.captured_at < 1
+        if fresh and not camera_check["done"]:
+            camera_check["done"] = True
+            if not args.video:
+                camera_check["name"],camera_check["blocked"] = check_camera(cfg["camera"]["index"],
+                    cfg["preflight"]["virtual_keywords"],cfg["preflight"]["virtual_check_enabled"])
+        now = time.monotonic()
+        out = [("Камера: "+cam.status+(" · "+cam.error if cam.error else ""),fresh and cam.status == "ready")]
+        for label,worker in (("YOLO",yolo),("FaceMesh",face)):
+            r = worker.output.peek()
+            out.append((label+": "+worker.status+(" · "+worker.error if worker.error else ""),
+                        worker.status == "ready" and r is not None and engine.fresh(r,now)))
+        out.extend([("В кадре одно лицо",engine.face.n_faces == 1 and engine.fresh(engine.face,now)),
+                    ("Телефона нет",not any(b.observed for b in engine.yolo.phones)),
+                    (f"Мониторов: {monitor_count()} (нужен 1)",monitor_count() == 1 or unlocked["monitors"]),
+                    ("Камера не виртуальная (эвристика)",not camera_check["blocked"])])
         return out
-
-    pre = PreflightScreen(preflight_checks)
+    pre = PreflightScreen(checks)
+    cal_view = CalibrationView(calibration.duration)
+    stack.addWidget(pre); stack.addWidget(cal_view)
 
     def unlock_monitors():
         if ask_password():
-            _unlocked["v"] = True
+            unlocked["monitors"] = True
             return True
         return False
     pre.on_unlock = unlock_monitors
-    cal_view = CalibrationView(cfg["calibration"]["duration_sec"])
-    stack.addWidget(pre); stack.addWidget(cal_view)
 
-    def start_calib():
-        try:
-            fio["name"] = pre.fio_text
-        except Exception:
-            pass
-        try:
-            pre.poll.stop()
-        except Exception:
-            pass
+    def start_calibration():
+        pre.poll.stop()
+        state["fio"],state["calibrating"] = pre.fio_text,True
         stack.setCurrentWidget(cal_view)
-        calib_mode["on"] = True
         cal_view.start()
-    pre.ok.connect(start_calib)
+        calibration.start(cal_view.started_at)
+        engine.reset()
+    pre.ok.connect(start_calibration)
+    cal_view.retry.clicked.connect(start_calibration)
 
-    def calib_done():
-        calib_mode["on"] = False
-        base = calib.finish()
-        engine.calib = base
-        # open test
-        w = TestWindow(on_violation=lambda t: emit_violation(t),
-                       on_finish=lambda ans: finish(),
-                       test_url=cfg["_test_url"], allowed_domains=cfg["_domains"])
-        test_win["w"] = w
-        stack.addWidget(w)
-        stack.setCurrentWidget(w)
-
-        # second-monitor live check
-        if monitor_count() > 1:
-            emit_violation("SECOND_MONITOR", {"live": True})
-    cal_view.done.connect(calib_done)
-
-    def calib_canceled():
-        calib_mode["on"] = False
+    def cancel_calibration():
+        state["calibrating"] = False
         stack.setCurrentWidget(pre)
-    cal_view.canceled.connect(calib_canceled)
+        pre.poll.start(1000)
+    cal_view.canceled.connect(cancel_calibration)
+
+    def calibration_done():
+        state["calibrating"] = False
+        try:
+            engine.calib = calibration.finish()
+            if engine.calib["unresolved_targets"]:
+                raise CalibrationError("Не удалось измерить позы взгляда: "+", ".join(engine.calib["unresolved_targets"])+". Повторите, двигая только глазами")
+            if not all(good for _,good in checks()):
+                raise CalibrationError("Проверка устройств не пройдена: вернитесь на старт")
+        except CalibrationError as e:
+            cal_view.failed(str(e))
+            return
+        engine.reset()
+        try:
+            w = TestWindow(emit_violation,lambda ans:finish(),cfg["_test_url"],cfg["_domains"])
+        except RuntimeError as e:
+            cal_view.failed(str(e))
+            return
+        window["test"] = w
+        w.panel.debug_on = args.debug
+        stack.addWidget(w); stack.setCurrentWidget(w)
+        state.update(active=True,started=time.monotonic(),status="Тест активен")
+        stack.locked = cfg["profile"] == "exam"
+        if stack.locked:
+            stack.showFullScreen()
+        hwnd["value"] = int(stack.winId())
+        if guard_on:
+            guarded = hk.start()
+            if cfg["profile"] == "exam" and not guarded:
+                state.update(active=False,status="Ошибка защиты")
+                stack.locked = False
+                stack.setCurrentWidget(cal_view)
+                stack.showNormal()
+                stack.removeWidget(w)
+                w.dispose(); w.deleteLater()
+                window["test"] = None
+                hk.stop()
+                cal_view.failed("Защита клавиш не активирована: "+", ".join(hk.errors))
+                return
+            fw.start(); pw.start(); clipboard.start()
+    cal_view.done.connect(calibration_done)
+    seen = {w:-1 for w in workers}
+    frame_seen = {"seq":-1}
+    resource = {"at":0.,"text":""}
+    import psutil
+    process = psutil.Process()
+    process.cpu_percent()
+    last_monitor = {"at":0.}
+
+    def poll():
+        now = time.monotonic()
+        if state["done"]:
+            return
+        for worker in workers:
+            result = worker.output.peek()
+            if result is None or seen[worker] == result.seq:
+                continue
+            seen[worker] = result.seq
+            for name,elapsed in getattr(result,"timings",{}).items():
+                metrics.add(name,elapsed)
+            if worker is face:
+                engine.on_face(result)
+                if state["calibrating"] and result.n_faces == 1 and result.pose_valid and result.gaze_valid and now-result.captured_at < .5:
+                    calibration.add(result.yaw,result.pitch,result.iris_h,result.iris_v,now=result.captured_at,left_eye=result.left_eye,right_eye=result.right_eye)
+            elif worker is yolo:
+                engine.on_yolo(result)
+            else:
+                engine.on_hands(result)
+        if state["active"]:
+            s = time.perf_counter()
+            # Disable evidence from a dead/stalled worker; never keep a phone or gaze forever.
+            if face.status != "ready":
+                engine.face.error = face.error or face.status
+            if yolo.status != "ready":
+                engine.yolo.error = yolo.error or yolo.status
+            for kind in engine.tick(now):
+                emit_violation(kind,engine.debug)
+            metrics.add("logic",time.perf_counter()-s)
+            if cam.status != "ready" or cam.output.peek() is None or now-cam.output.peek().captured_at > 1:
+                emit_violation("CAMERA_LOST",{"status":cam.status})
+            if now-last_monitor["at"] >= 2:
+                last_monitor["at"] = now
+                if monitor_count() > 1 and not unlocked["monitors"]:
+                    emit_violation("SECOND_MONITOR")
+            panel = window["test"].panel
+            elapsed = int(now-state["started"])
+            panel.timer.setText(f"{elapsed//60:02d}:{elapsed%60:02d}")
+            d = engine.debug
+            n_faces,n_phones = d.get("n_faces"),d.get("phones")
+            face_status = "UNKNOWN" if n_faces is None else (f"DETECTED ({n_faces})" if n_faces else "LOST")
+            phone_status = "UNKNOWN" if n_phones is None else ("DETECTED" if d["conds"]["PHONE_DETECTED"] else ("CANDIDATE" if n_phones else "NOT DETECTED"))
+            panel.states.setText(f"HEAD: {d.get('head','UNKNOWN')}\nGAZE: {d.get('gaze','UNKNOWN')}\nFACE: {face_status}\nPHONE: {phone_status}")
+            active = [(r.active_duration(now)/max(r.hold,.01),name,r) for name,r in engine.rules.items()
+                      if d.get("conds",{}).get(name) and name.startswith(("GAZE_","HEAD_"))]
+            if active:
+                fraction,name,r = max(active)
+                panel.set_hold(f"{name}: {r.active_duration(now):.1f}/{r.hold:.1f}с",fraction)
+            else:
+                panel.set_hold("Удержание: 0.0 с",0)
+            errors = [w.error for w in workers if w.status == "error"]
+            if guard_on and hk.status != "active":
+                errors.append("Guard: "+hk.status)
+            if writer.error:
+                errors.append("Запись: "+writer.error)
+            panel.set_status(" · ".join(errors) if errors else "Мониторинг активен · PHONE_AIMED — эвристика")
+        packet = cam.output.peek()
+        if packet is not None and packet.seq != frame_seen["seq"]:
+            frame_seen["seq"] = packet.seq
+            if state["calibrating"] or state["active"]:
+                s = time.perf_counter()
+                vis = render_overlay(packet,engine.face,engine.yolo,engine.hands,cfg["camera"]["mirror_preview"])
+                if state["calibrating"]:
+                    cal_view.preview.setPixmap(SidePanel.pixmap(vis))
+                else:
+                    window["test"].panel.show_frame(vis)
+                metrics.add("ui_render",time.perf_counter()-s)
+                metrics.add("preview_latency",time.monotonic()-packet.captured_at)
+        if state["active"] and now-resource["at"] > 1:
+            resource["at"] = now
+            snap = metrics.snapshot()
+            averages = " · ".join(f"{k}: {v['mean_ms']:.1f}ms" for k,v in snap.items())
+            result_ages = [now-r.captured_at for w in (face,yolo) if (r:=w.output.peek()) is not None]
+            decision_latency = max(result_ages,default=0)*1000
+            window["test"].panel.set_debug(f"Camera FPS: {cam.camera_fps:.1f} · capture {cam.read_ms:.1f}ms\n"
+                f"Decision age: {decision_latency:.0f}ms · CPU process: {process.cpu_percent():.0f}%\n"
+                f"RAM process: {process.memory_info().rss/1024**2:.0f}MB · imgsz {yolo.budget.imgsz}\n"
+                f"YOLO {yolo.budget.target_fps:.1f}Hz · Face {face.budget.target_fps:.1f}Hz\n{averages}")
+        if examiner and examiner.finish_requested.is_set():
+            examiner.finish_requested.clear()
+            # HTTP endpoint cannot bypass the exam exit password.
+            if state["active"] and (cfg["profile"] != "exam" or ask_password()):
+                finish()
 
     def finish():
-        if session["done"]:
+        if state["done"]:
             return
-        session["done"] = True
-        session["status"] = texts["examiner_done"]
-        t1 = time.time()
-        dur = t1 - store.t0
-        fps = fps_hist["n"] / max(dur, 1)
-        trust = trust_calc.get_score(texts.get("trust_labels") or {})
-        out, score, trust = generate(store, cfg, cfg["report"]["out"], fps, dur,
-                                     fio.get("name", ""), trust)
-        # result screen
+        state.update(done=True,active=False,calibrating=False,status="Завершено")
+        stack.locked = False
+        hk.stop(); fw.stop(); pw.stop(); clipboard.stop()
+        # Report generation occurs after exam end, never on a video hot path.
+        for worker in [cam]+workers:
+            if not worker.stop():
+                worker.wait()
+        writer.flush()
+        report,score,_ = generate(store,cfg,cfg["report"]["out"],cam.camera_fps,time.time()-store.t0,state["fio"],trust.get_score(texts.get("trust_labels") or {}))
+        import json
+        Path(session_dir/"timings.json").write_text(json.dumps(metrics.snapshot(),indent=2),encoding="utf-8")
         res = QWidget()
-        res.setObjectName("root")
-        l = QVBoxLayout(res)
-        l.setContentsMargins(16, 16, 16, 16)
-        head = QLabel(texts["result_title"])
-        head.setObjectName("title")
-        l.addWidget(head)
-        l.addWidget(QLabel(f"{texts['violations']}: {len(store.all())}. {texts['trust_score']}: {score}/100."))
-        if trust["breakdown_text"]:
-            l.addWidget(QLabel(trust["breakdown_text"]))
-        l.addWidget(QLabel(f"Отчёт: {out}"))
-        b = QPushButton(texts["result_open"])
-
-        def _open(path):
-            try:
-                if os.name == "nt":
-                    os.startfile(path)
-                elif sys.platform == "darwin":
-                    import subprocess
-                    subprocess.Popen(["open", path])
-                else:
-                    import subprocess
-                    subprocess.Popen(["xdg-open", path])
-            except Exception as e:
-                print("[report] cannot open:", e)
-
-        b.clicked.connect(lambda: _open(out))
-        l.addWidget(b)
-        q = QPushButton(texts["result_exit"]); q.clicked.connect(app.quit)
-        l.addWidget(q)
+        layout = QVBoxLayout(res)
+        layout.addWidget(QLabel(f"Тест завершён · индекс: {score}/100"))
+        layout.addWidget(QLabel(f"Отчёт: {report}\nСессия: {session_dir}"+("\nОшибка записи: "+writer.error if writer.error else "")))
+        button = QPushButton("Выйти")
+        button.clicked.connect(app.quit)
+        layout.addWidget(button)
         stack.addWidget(res); stack.setCurrentWidget(res)
-        _open(out)
 
-    bus.sub(lambda v: None)
-    cam.start(); yolo.start(); face.start()
+    timer = QTimer(app)
+    timer.timeout.connect(poll)
+    timer.start(33)
+    for worker in workers:
+        worker.start()
+    cam.start()
     stack.show()
-
+    QTimer.singleShot(600,lambda:splash.finish(stack))
+    cleaned = {"done":False}
     def cleanup():
-        for th in (cam, yolo, face, fw, pw, cg):
-            try: th.stop()
-            except Exception: pass
-        hk.stop()
-        try:
-            if examiner is not None:
-                examiner.stop()
-        except Exception: pass
+        if cleaned["done"]:
+            return
+        cleaned["done"] = True
+        timer.stop()
+        hk.stop(); clipboard.stop(); fw.stop(); pw.stop()
+        for worker in [cam]+workers:
+            if not worker.stop():
+                print(f"Ожидаю завершения {type(worker).__name__}; драйвер/инференс не отвечает")
+                worker.wait()  # no unsafe QThread destruction
+        writer.stop()
+        if window["test"]:
+            window["test"].dispose()
+        if examiner:
+            examiner.stop()
+        store.close()
+        lock.unlock()
     app.aboutToQuit.connect(cleanup)
     try:
-        rc = app.exec()
+        return app.exec()
     finally:
         cleanup()
-    return rc
 
 if __name__ == "__main__":
     try:

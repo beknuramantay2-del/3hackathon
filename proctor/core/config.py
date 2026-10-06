@@ -51,7 +51,7 @@ def _check_rule(cfg, name):
     return enabled
 
 
-def load_config(path=None, profile=None):
+def load_config(path=None, profile=None, require_test_url=True):
     if path is None:
         here = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
         alt = "proctor/config.yaml"
@@ -73,7 +73,7 @@ def load_config(path=None, profile=None):
     test = _need(cfg, ("test",), dict)
     url = _need(cfg, ("test", "test_url"), str)
     domains = _need_list(cfg, ("test", "allowed_domains"), str)
-    if prof == "exam" and not url.strip():
+    if prof == "exam" and require_test_url and not url.strip():
         raise ConfigError(f"{NAME}: в профиле exam поле 'test.test_url' не должно быть пустым")
     if url.strip() and not os.path.isfile(url):
         from urllib.parse import urlparse as _up
@@ -139,6 +139,29 @@ def load_config(path=None, profile=None):
     for k, v in weights.items():
         if not isinstance(v, (int, float)) or v < 0:
             raise ConfigError(f"{NAME}: поле 'trust_weights.{k}' должно быть числом >= 0")
+
+    # Runtime budgets must be valid: no division by zero or impossible voting windows.
+    for section, key in (("yolo", "imgsz"), ("yolo", "target_fps"), ("yolo", "vote_window"),
+                         ("face", "max_faces"), ("calibration", "duration_sec")):
+        if cfg[section][key] <= 0:
+            raise ConfigError(f"{NAME}: {section}.{key} должно быть > 0")
+    if cfg["face"]["max_faces"] < 2:
+        raise ConfigError(f"{NAME}: face.max_faces >= 2 для Кейс №3")
+    if cfg["yolo"]["vote_threshold"] < 1 or cfg["yolo"]["vote_threshold"] > cfg["yolo"]["vote_window"]:
+        raise ConfigError(f"{NAME}: неверные параметры vote_threshold/vote_window")
+    for key in ("conf_phone", "conf_person"):
+        if not 0 < cfg["yolo"][key] <= 1:
+            raise ConfigError(f"{NAME}: yolo.{key} должно быть в (0, 1]")
+    perf = cfg.get("performance", {})
+    if perf.get("mode", "auto") not in ("auto", "weak", "balanced"):
+        raise ConfigError(f"{NAME}: performance.mode должно быть auto/weak/balanced")
+    for section,key,default in (("face","target_fps",15),("face","hands_fps",5),
+                                ("face","max_width",640),("performance","threads",2)):
+        value = cfg.get(section,{}).get(key,default)
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or value <= 0:
+            raise ConfigError(f"{NAME}: {section}.{key} должно быть > 0")
+    if cfg["calibration"]["duration_sec"] < 10:
+        raise ConfigError(f"{NAME}: calibration.duration_sec >= 10 для пяти поз")
 
     cfg["profile"] = prof
     cfg["_domains"] = domains
