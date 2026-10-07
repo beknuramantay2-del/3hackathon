@@ -112,6 +112,7 @@ class MandatoryCalibration:
         if self.done or now-self.cal.started_at < 15.:
             return False
         if self.stage == 'head':
+            self.preview()
             self.head_base = self._finish_head()
             self.stage = 'gaze'
             self.cal = Calibration(15., min_samples=self.min_samples, settle=.6, reject_head_motion=True)

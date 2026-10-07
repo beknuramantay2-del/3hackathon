@@ -184,7 +184,7 @@ def main():
             window.banner.setText('FaceMesh ещё не готов: '+(face.error or face.status));return
         calibration=MandatoryCalibration()
         auto_attempted=True
-        engine.calib={}
+        engine.calib={};engine.preview_base={}
         calibration.start(time.monotonic())
         calibration_mode=mode;next_phase=None
         engine.reset()
@@ -207,6 +207,7 @@ def main():
                 engine.on_face(result)
                 if calibration and now-result.captured_at<.5:
                     calibration.feed(result)
+                    engine.preview_base=calibration.preview()
             elif worker is yolo:
                 engine.on_yolo(result)
             else:
@@ -240,7 +241,7 @@ def main():
         engine.tick(now,directions_enabled=ready)
         engine.debug['calibrated']=ready
         engine.debug['immediate_phone_conf']=max(policy.phone_conf,yolo.conf_phone)
-        if not ready:engine.debug.update(head='UNKNOWN',gaze='UNKNOWN')
+        engine.debug.update(head=engine.debug['head_display'],gaze=engine.debug['gaze_display'])
         timings.add('logic',time.perf_counter()-s)
         conditions=policy.observations(engine,now,ready)
         # Setup is not an exam: absence alerts begin only after the first complete calibration.
@@ -274,12 +275,14 @@ def main():
         phone_text='CONFIRMED' if yf and conditions['PHONE_DETECTED'] else ('CANDIDATE' if yf and y.candidates else ('НЕ НАБЛЮДАЕТСЯ' if yf else 'UNKNOWN'))
         phone_display={'CONFIRMED':'подтверждён','CANDIDATE':'кандидат, проверяем','НЕ НАБЛЮДАЕТСЯ':'не обнаружен','UNKNOWN':'нет свежих данных'}[phone_text]
         window.set_observation(('не обнаружено' if f.n_faces==0 else 'ученик в кадре' if f.n_faces==1 else f'{f.n_faces} · возможен второй человек') if ff else 'нет свежих данных',phone_display)
-        window.show_directions(d.get('head'),d.get('gaze'),ready)
+        window.show_directions(d.get('head'),d.get('gaze'),ready,preview=d.get('preview_ready',False),
+            head_calibrated=ready and d.get('head_display_calibrated',False),gaze_calibrated=ready and d.get('gaze_display_calibrated',False))
         labels=('ЗЕЛЁНЫЙ · активных предупреждений нет','ЖЁЛТЫЙ · требуется наблюдение','КРАСНЫЙ · требуется проверка экзаменатором')
         window.signal_badge.setText(labels[policy.level]+(' · калибровка не завершена' if not ready else '') if policy.level else labels[0] if ready else 'Калибровка обязательна · экзамен не готов')
         window.signal_badge.setStyleSheet('color: '+(('#91cdaa','#f4c36f','#ff8c8c')[policy.level] if ready or policy.level else '#a5b3c9'))
         window.highlight_gaze(bool(engine.calib) and calibration is None and any(k.startswith('GAZE_') for k in d.get('warnings_active',[])))
-        if d.get('gaze')=='UNKNOWN':window.gaze_card.note.setText(f.gaze_reason or 'Нет свежего измерения глаз')
+        if d.get('gaze')=='UNKNOWN':
+            window.gaze_card.note.setText(f.gaze_reason or 'Нет свежего измерения глаз');window.gaze_card.note.show()
         seconds=int(now-started);window.session_clock.setText(f'{seconds//60:02}:{seconds%60:02}')
         guard_workers=guard_on and hk.status=='active' and fw.isRunning() and pw.isRunning()
         window.mode_label.setText('Режим защиты' if guard_workers else 'Защита неполная / запускается' if guard_on else 'Просмотр CV · защита выключена')
@@ -299,7 +302,7 @@ def main():
         confidence=f'{pmax:.2f}' if pmax is not None and yf else 'нет свежего кандидата'
         recovery=any(p.confirmed and p.observed and p.conf<yolo.conf_phone and p.strong_at is not None and now-p.strong_at<=.8 for p in y.phones)
         support=', '.join(sorted({p.support_kind for p in y.phones if p.observed and p.confirmed and p.support_kind}))
-        window.measurements.setText(f'HEAD Δ yaw / pitch: {head_numbers}; face-local 3D (не метрическая точность)\n'
+        window.measurements.setText(f'HEAD Δ yaw / pitch: {head_numbers}; PnP + измеренный центр (не метрическая точность)\n'
             f'GAZE Δ H / V: {gaze_numbers}; глаз L {left}, R {right}\n'
             f'HEAD вход: yaw {t.get("yaw")}° / pitch {t.get("pitch")}°; выход 70% порога\n'
             f'GAZE вход L/R/U/D: {gate_text}\n'
@@ -324,8 +327,8 @@ def main():
             if item in ('RAISED','AIM'):
                 available=available and ff and f.face_box is not None
             window.set_case(item,(state_for(kind) if available else 'UNKNOWN: модуль/данные недоступны')+(' · эвристика' if item=='AIM' else ''))
-        window.set_case('HEAD',DIRECTIONS[d['head']]+' · независимо от глаз' if ready else 'UNKNOWN: обязательная калибровка')
-        window.set_case('GAZE',DIRECTIONS[d['gaze']]+' · независимые глаза' if ready else 'UNKNOWN: обязательная калибровка')
+        window.set_case('HEAD',DIRECTIONS[d['head']]+(' · независимо от глаз' if ready else ' · предварительно, калибровка не принята'))
+        window.set_case('GAZE',DIRECTIONS[d['gaze']]+(' · независимые глаза' if ready and d.get('gaze_display_calibrated') else ' · предварительно, без gaze-тревог'))
         window.set_case('DOWN',state_for('GAZE_DOWN') if ready and f.gaze_valid and ff else 'UNKNOWN: требуется центр / читаемые глаза')
         window.set_case('SIDE',state_for('GAZE_LEFT')+' / '+state_for('GAZE_RIGHT') if ready and f.gaze_valid and ff else 'UNKNOWN: требуется центр / читаемые глаза')
         window.set_case('PRESENCE','Лиц: '+face_text+(' · landmarks потеряны' if ff and not f.pose_valid else ''))
@@ -392,7 +395,7 @@ def main():
             head=engine.debug.get('head'),gaze=engine.debug.get('gaze'),
             episodes=len(store.episode_rows()),clips=recorder.clips,evidence_errors=recorder.failures,policy=dict(yellow_sec=policy.yellow,red_sec=policy.red),
             case_status={key:window.checklist.item(row,1).text() for key,row in window.rows.items()},
-            calibration=engine.calib.get('mode'),calibration_error=calibration_error,guard=hk.status,
+            calibration=engine.calib.get('mode'),preview_ready=engine.debug.get('preview_ready',False),pose_method=engine.face.pose_method,calibration_error=calibration_error,guard=hk.status,
             immediate_phone_conf=max(policy.phone_conf,yolo.conf_phone),
             gaze_entry_gates=engine.debug.get('gaze_entry_gates'),detail_calls=yolo.detail_calls,
             preview=dict(image_size=[window.camera.image_rect.width(),window.camera.image_rect.height()],window_size=[window.width(),window.height()]),
