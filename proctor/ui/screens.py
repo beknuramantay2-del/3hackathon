@@ -3,8 +3,8 @@ import cv2
 import time
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QPushButton, QLineEdit, QListWidget, QProgressBar, QApplication, QGridLayout)
-from PyQt6.QtGui import QImage, QPixmap
+                             QPushButton, QLineEdit, QListWidget, QListWidgetItem, QProgressBar, QApplication, QGridLayout)
+from PyQt6.QtGui import QImage, QPixmap, QColor
 from proctor.core.strings import load_strings
 
 T = load_strings()
@@ -225,8 +225,10 @@ class SidePanel(QWidget):
     def set_status(self,text):
         self.status.setText(text)
 
-    def log(self,text):
-        self.feed.insertItem(0,text)
+    def log(self,text,level=None,episode_id=''):
+        item=QListWidgetItem(text);item.setData(Qt.ItemDataRole.UserRole,episode_id)
+        if level is not None:item.setForeground(QColor(('#91cdaa','#f4c36f','#ff8c8c')[min(2,max(0,level))]))
+        self.feed.insertItem(0,item)
         while self.feed.count() > 100:
             self.feed.takeItem(self.feed.count()-1)
 

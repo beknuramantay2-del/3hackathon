@@ -234,6 +234,7 @@ def main():
         engine.tick(now,directions_enabled=ready)
         engine.debug['calibrated']=ready
         engine.debug['immediate_phone_conf']=max(policy.phone_conf,yolo.conf_phone)
+        if not ready:engine.debug.update(head='UNKNOWN',gaze='UNKNOWN')
         timings.add('logic',time.perf_counter()-s)
         conditions=policy.observations(engine,now,ready)
         # Setup is not an exam: absence alerts begin only after the first complete calibration.
@@ -256,6 +257,7 @@ def main():
             vis=render_overlay(packet,engine.face,engine.yolo,engine.hands,cfg['camera']['mirror_preview'],states=engine.debug)
             window.show_frame(vis)
             timings.add('ui_render',time.perf_counter()-s)
+            timings.add('preview_age',time.monotonic()-packet.captured_at)
         if now-last_ui<.15:
             return
         last_ui=now
@@ -334,8 +336,8 @@ def main():
             metrics_at=now
             resource_text=f'CPU процесса: {process.cpu_percent(None):.0f}% (может быть >100% на нескольких ядрах); RAM: {process.memory_info().rss/1024**2:.0f} MiB'
             stats=timings.snapshot()
-            stage_text=' · '.join(name+': '+f'{stats[name]["mean_ms"]:.1f}ms' for name in ('yolo','tracker','face_scan','mediapipe','head_pose','eye_gaze','hands','logic','ui_render') if name in stats)
-        window.performance.setText(f'Реально: Camera {camera_rate:.1f}fps, YOLO {yolo.actual_fps if yf else 0.:.1f}Hz, Face {face.actual_fps if ff else 0.:.1f}Hz\n'
+            stage_text=' · '.join(name+': '+f'{stats[name]["mean_ms"]:.1f}ms' for name in ('preview_age','yolo','tracker','face_scan','mediapipe','head_pose','eye_gaze','hands','logic','ui_render') if name in stats)
+        window.performance.setText(f'Реально: Camera {camera_rate:.1f}fps · захват {cam.read_ms:.1f}ms, YOLO {yolo.actual_fps if yf else 0.:.1f}Hz, Face {face.actual_fps if ff else 0.:.1f}Hz\n'
             f'Возраст данных: YOLO {age(y)}, Face {age(f)}. Пропущено кадров YOLO {yolo.skipped_frames} / Face {face.skipped_frames}\n'
             f'Среднее время этапов: {stage_text}\n{resource_text}\n'
             f'Футаж: {recorder.clips} фрагментов · ошибок {recorder.failures}'+(' · '+recorder.error if recorder.error else '')+'\n'+
@@ -385,7 +387,7 @@ def main():
             episodes=len(store.episode_rows()),clips=recorder.clips,evidence_errors=recorder.failures,policy=dict(yellow_sec=policy.yellow,red_sec=policy.red),
             case_status={key:window.checklist.item(row,1).text() for key,row in window.rows.items()},
             calibration=engine.calib.get('mode'),guard=hk.status,
-            effective_holds={key:rule.hold for key,rule in engine.rules.items()},
+            immediate_phone_conf=max(policy.phone_conf,yolo.conf_phone),
             gaze_entry_gates=engine.debug.get('gaze_entry_gates'),detail_calls=yolo.detail_calls,
             preview=dict(image_size=[window.camera.image_rect.width(),window.camera.image_rect.height()],window_size=[window.width(),window.height()]),
             phone_evidence=[dict(conf=p.conf,support=p.support_kind,observed=p.observed,confirmed=p.confirmed) for p in engine.yolo.phones]),ensure_ascii=False,indent=2))

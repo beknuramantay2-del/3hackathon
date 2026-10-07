@@ -201,7 +201,7 @@ examiner:
 # Пустая salt_hex генерируется при первом старте.
 hash_chain:
   enabled: true
-  salt_hex: ""
+  salt_hex: "ab47662a8d15fbffa16f3f7813b94e4b"
 
 report:
   out: data/report.html
