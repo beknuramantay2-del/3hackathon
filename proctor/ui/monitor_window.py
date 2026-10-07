@@ -1,8 +1,8 @@
 """An operator-friendly desktop monitor: observation first, diagnostics one tab away."""
-from PyQt6.QtCore import Qt,pyqtSignal
+from PyQt6.QtCore import Qt,pyqtSignal,QRect
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget,QLabel,QFrame,QVBoxLayout,QHBoxLayout,QPushButton,QGridLayout,
-    QProgressBar,QDoubleSpinBox,QTableWidget,QTableWidgetItem,QHeaderView,QListWidget,QSizePolicy,QTabWidget,QSplitter)
+    QProgressBar,QDoubleSpinBox,QTableWidget,QTableWidgetItem,QHeaderView,QListWidget,QSizePolicy,QTabWidget,QSplitter,QScrollArea)
 from .screens import SidePanel
 
 DIRECTIONS={'CENTER':'Прямо','LEFT':'Влево','RIGHT':'Вправо','UP':'Вверх','DOWN':'Вниз','UNKNOWN':'Не определяется'}
@@ -14,37 +14,34 @@ CASES=(('PHONE','Телефон в кадре'),('HAND','Телефон в ру�
  ('WIN','Клавиша Win'),('SHOT','Снимок экрана'),('TABS','Переключение вкладок'),('WINDOWS','Посторонние окна'))
 
 class VideoPreview(QLabel):
+    """The entire frame, aspect-fit. No crop/zoom hiding the desk zone."""
     def __init__(self):
         super().__init__('Ожидаем изображение с камеры…')
         self.setObjectName('camera');self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumSize(420,220)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Expanding)
-        self.hud=QLabel('ГЛАЗА — Не определяется\nГОЛОВА — Не определяется',self)
-        self.hud.setObjectName('cameraHud');self.hud.setWordWrap(True)
-        self.hud.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setMinimumSize(420,300);self.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Expanding)
+        self._source=None;self.image_rect=QRect()
+    def set_frame(self,frame):
+        self._source=SidePanel.pixmap(frame,frame.shape[1],frame.shape[0]);self._fit()
+    def _fit(self):
+        if self._source is None:return
+        area=self.contentsRect().adjusted(1,1,-1,-1)
+        if area.width()<1 or area.height()<1:return
+        pixmap=self._source.scaled(area.size(),Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.FastTransformation)
+        self.image_rect=QRect(area.x()+(area.width()-pixmap.width())//2,area.y()+(area.height()-pixmap.height())//2,pixmap.width(),pixmap.height())
+        self.setPixmap(pixmap)
     def resizeEvent(self,event):
-        super().resizeEvent(event)
-        self.hud.setGeometry(12,max(12,self.height()-78),max(100,self.width()-24),64)
+        super().resizeEvent(event);self._fit()
 
-class DirectionCard(QFrame):
+class DirectionReadout(QFrame):
+    """One labelled state, no repeated arrow strip."""
     def __init__(self,title):
-        super().__init__();self.setObjectName('panel')
-        layout=QVBoxLayout(self);layout.setContentsMargins(16,12,16,12);layout.setSpacing(6)
-        title_label=QLabel(title);title_label.setObjectName('eyebrow');layout.addWidget(title_label)
-        self.state=QLabel('— Не определяется');self.state.setObjectName('directionValue');layout.addWidget(self.state)
-        strip=QHBoxLayout();self.chips={}
-        for direction in ('LEFT','UP','CENTER','DOWN','RIGHT'):
-            chip=QLabel(ARROWS[direction]);chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            chip.setToolTip(DIRECTIONS[direction]);chip.setAccessibleName(DIRECTIONS[direction])
-            self.chips[direction]=chip;strip.addWidget(chip)
-        layout.addLayout(strip)
-        self.note=QLabel('Нет свежего измерения');self.note.setObjectName('muted');self.note.setWordWrap(True);layout.addWidget(self.note)
+        super().__init__();self.title=title;self.setObjectName('panel')
+        layout=QVBoxLayout(self);layout.setContentsMargins(10,6,10,6)
+        self.state=QLabel(title+': — Не определяется');self.state.setObjectName('directionValue');self.state.setWordWrap(True);layout.addWidget(self.state)
+        self.note=QLabel(self);self.note.hide();self.chips={}
     def update_state(self,state):
         state=state if state in DIRECTIONS else 'UNKNOWN'
-        self.state.setText(ARROWS[state]+' '+DIRECTIONS[state])
-        for direction,chip in self.chips.items():
-            active=direction==state
-            chip.setStyleSheet('background:#244a78;color:#e4f0ff;border:1px solid #679ee6;border-radius:5px;font-size:20px;padding:2px;' if active else 'color:#8796ad;font-size:20px;padding:2px;')
+        self.state.setText(self.title+': '+ARROWS[state]+' '+DIRECTIONS[state]);self.state.setToolTip(self.note.text())
 
 class MonitorWindow(QWidget):
     calibrate=pyqtSignal(str)
@@ -52,36 +49,37 @@ class MonitorWindow(QWidget):
     def __init__(self):
         super().__init__();self.setObjectName('root')
         self.setWindowTitle('Прокторинг · Камера и наблюдение')
-        self.resize(1280,800);self.setMinimumSize(960,700);self.locked=False
-        outer=QVBoxLayout(self);outer.setContentsMargins(24,18,24,18);outer.setSpacing(14)
+        self.resize(1280,800);self.setMinimumSize(960,640);self.locked=False
+        outer=QVBoxLayout(self);outer.setContentsMargins(16,12,16,12);outer.setSpacing(10)
         header=QHBoxLayout()
         heading=QVBoxLayout();title=QLabel('Наблюдение за экзаменом');title.setObjectName('title')
-        heading.addWidget(title);subtitle=QLabel('Локально на устройстве · камера, глаза и предметы');subtitle.setObjectName('muted');heading.addWidget(subtitle)
+        heading.addWidget(title)
         header.addLayout(heading,1)
-        self.mode_label=QLabel('Просмотр CV · защита выключена');self.mode_label.setObjectName('modeBadge');header.addWidget(self.mode_label)
+        self.mode_label=QLabel('Просмотр CV · защита выключена');self.mode_label.setObjectName('modeBadge')
         self.session_clock=QLabel('00:00');self.session_clock.setObjectName('clock');header.addWidget(self.session_clock)
         outer.addLayout(header)
         split=QSplitter(Qt.Orientation.Horizontal);split.setChildrenCollapsible(False)
-        left_widget=QWidget();left=QVBoxLayout(left_widget);left.setContentsMargins(0,0,16,0);left.setSpacing(10)
-        self.banner=QLabel('Подготовка камеры и локальных моделей…');self.banner.setObjectName('banner');self.banner.setWordWrap(True);left.addWidget(self.banner)
+        left_widget=QWidget();left=QVBoxLayout(left_widget);left.setContentsMargins(0,0,10,0);left.setSpacing(8)
+        self.banner=QLabel('Подготовка камеры и локальных моделей…');self.banner.setObjectName('banner');self.banner.setWordWrap(True)
         self.camera=VideoPreview();left.addWidget(self.camera,1)
         presence=QHBoxLayout();self.face_summary=QLabel('Лицо: ожидаем измерение');self.phone_summary=QLabel('Телефон: ожидаем измерение')
-        for label in (self.face_summary,self.phone_summary):label.setObjectName('observationBadge');presence.addWidget(label,1)
-        left.addLayout(presence)
-        cards=QHBoxLayout();self.head_card=DirectionCard('ГОЛОВА');self.gaze_card=DirectionCard('ГЛАЗА')
+        for label in (self.face_summary,self.phone_summary):label.setObjectName('observationBadge');label.setWordWrap(True);presence.addWidget(label,1)
+        cards=QHBoxLayout();self.head_card=DirectionReadout('ГОЛОВА');self.gaze_card=DirectionReadout('ГЛАЗА')
         cards.addWidget(self.head_card);cards.addWidget(self.gaze_card);left.addLayout(cards)
         self.direction_labels={(kind,d):card.chips[d] for kind,card in (('HEAD',self.head_card),('GAZE',self.gaze_card)) for d in card.chips}
         self.progress=QProgressBar();self.progress.setRange(0,100);self.progress.setValue(0);self.progress.setFormat('Нет активного удержания');left.addWidget(self.progress)
-        self.calibration_note=QLabel('Для настройки взгляда сядьте прямо и следуйте пяти точкам. Это займёт 10 секунд.');self.calibration_note.setObjectName('muted');self.calibration_note.setWordWrap(True);left.addWidget(self.calibration_note)
-        buttons=QHBoxLayout();self.neutral=QPushButton('Обновить центр · 2 с');self.neutral.setObjectName('secondary');self.five=QPushButton('Настроить взгляд · 10 с')
+        self.calibration_note=QLabel('Для настройки взгляда сядьте прямо и следуйте пяти точкам. Это займёт 10 секунд.');self.calibration_note.setObjectName('muted');self.calibration_note.setWordWrap(True)
+        self.neutral=QPushButton('Обновить центр · 2 с');self.neutral.setObjectName('secondary');self.five=QPushButton('Настроить взгляд · 10 с')
         self.neutral.clicked.connect(lambda:self.calibrate.emit('center'));self.five.clicked.connect(lambda:self.calibrate.emit('five'))
-        buttons.addWidget(self.five);buttons.addWidget(self.neutral);left.addLayout(buttons)
+        header.insertWidget(header.count()-1,self.five)
         split.addWidget(left_widget)
-        right_widget=QWidget();right_widget.setMinimumWidth(330);right=QVBoxLayout(right_widget);right.setContentsMargins(0,0,0,0);right.setSpacing(12)
+        right_widget=QWidget();right_widget.setMinimumWidth(300);right_widget.setMaximumWidth(350);right=QVBoxLayout(right_widget);right.setContentsMargins(0,0,0,0);right.setSpacing(8)
+        right.addWidget(self.mode_label);right.addWidget(self.banner)
+        right.addLayout(presence);right.addWidget(self.calibration_note)
         self.tabs=QTabWidget();right.addWidget(self.tabs,1)
         events=QWidget();el=QVBoxLayout(events);el.setContentsMargins(12,16,12,12);el.setSpacing(12)
-        hint=QLabel('Наблюдение, а не автоматический вердикт');hint.setObjectName('sectionTitle');hint.setWordWrap(True);el.addWidget(hint)
-        note=QLabel('Короткий взгляд в сторону не создаёт событие. Длительное удержание видно на шкале под камерой.');note.setObjectName('muted');note.setWordWrap(True);el.addWidget(note)
+        hint=QLabel('События наблюдения');hint.setObjectName('sectionTitle');hint.setWordWrap(True);el.addWidget(hint)
+        note=QLabel('Короткий взгляд не создаёт событие. Удержание — под камерой.');note.setObjectName('muted');note.setWordWrap(True);el.addWidget(note)
         self.feed=QListWidget();self.feed.setWordWrap(True);self.feed.setAccessibleName('Лента событий');el.addWidget(self.feed,1)
         self.empty_feed=QLabel('Событий пока нет');self.empty_feed.setObjectName('muted');el.addWidget(self.empty_feed)
         self.tabs.addTab(events,'События')
@@ -104,11 +102,12 @@ class MonitorWindow(QWidget):
         self.yaw_threshold=self.spin(8,45,1,18,0);self.pitch_threshold=self.spin(8,35,1,12,0)
         for i,(label,widget) in enumerate((('Порог уверенного телефона',self.phone_threshold),('Взгляд в сторону, с',self.gaze_hold),('Взгляд вверх / вниз, с',self.down_hold),('Поворот головы, °',self.yaw_threshold),('Наклон головы, °',self.pitch_threshold))):
             l=QLabel(label);l.setWordWrap(True);knobs.addWidget(l,i,0);knobs.addWidget(widget,i,1)
-        dl.addLayout(knobs)
+        dl.addLayout(knobs);dl.addWidget(self.neutral)
         explanation=QLabel('Confidence — оценка модели, не точность в %. Слабый телефон требует повторных наблюдений и руки либо согласия общего поиска и ROI. Изменение порогов влияет на события.');explanation.setWordWrap(True);explanation.setObjectName('muted');dl.addWidget(explanation);dl.addStretch(1)
-        self.tabs.addTab(diagnostic,'Настройки')
+        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);scroll.setWidget(diagnostic)
+        self.tabs.addTab(scroll,'Настройки')
         self.stop=QPushButton('Завершить и сохранить');self.stop.setObjectName('secondary');self.stop.clicked.connect(self.finish.emit);right.addWidget(self.stop)
-        split.addWidget(right_widget);split.setStretchFactor(0,3);split.setStretchFactor(1,2);split.setSizes([740,430]);outer.addWidget(split,1)
+        split.addWidget(right_widget);split.setStretchFactor(0,3);split.setStretchFactor(1,0);split.setSizes([900,320]);outer.addWidget(split,1)
         self.target=QLabel('●',self);self.target.setObjectName('calibrationTarget');self.target.resize(48,48);self.target.setAlignment(Qt.AlignmentFlag.AlignCenter);self.target.hide()
         self._pose=None
         self._warning=False
@@ -134,10 +133,10 @@ class MonitorWindow(QWidget):
         self.head_card.update_state(head);self.gaze_card.update_state(gaze)
         self.head_card.note.setText('Отдельно от движения глаз' if calibrated else 'Сначала настройте центральную позу')
         self.gaze_card.note.setText('Измерение положения зрачков' if calibrated else 'Предварительно · предупреждения выключены')
-        self.camera.hud.setText(f'ГЛАЗА {ARROWS.get(gaze,"—")} {DIRECTIONS.get(gaze,"Не определяется")}\nГОЛОВА {ARROWS.get(head,"—")} {DIRECTIONS.get(head,"Не определяется")}'+(' · нужна настройка' if not calibrated else ''))
+
 
     def show_frame(self,frame):
-        self.camera.setPixmap(SidePanel.pixmap(frame,self.camera.width(),self.camera.height()))
+        self.camera.set_frame(frame)
         if self._pose:self.show_target(self._pose)
 
     def highlight_gaze(self,warning):

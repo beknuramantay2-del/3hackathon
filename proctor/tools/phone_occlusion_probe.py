@@ -24,10 +24,13 @@ def main():
     cx,cy,w,h=max(phones,key=lambda b:b[2]*b[3])
     x1,y1,x2,y2=map(int,((cx-w/2)*width,(cy-h/2)*height,(cx+w/2)*width,(cy+h/2)*height))
     rows=[]
-    for mode in ('full','half_left','half_bottom'):
+    for mode in ('full','half_left','half_bottom','desk_visible_half','desk_visible_quarter','empty_desk'):
         frame=base.copy()
         if mode=='half_left':frame[y1:y2,x1:(x1+x2)//2]=110
         if mode=='half_bottom':frame[(y1+y2)//2:y2,x1:x2]=110
+        if mode=='desk_visible_half':frame[y1+(y2-y1)//2:]=110
+        if mode=='desk_visible_quarter':frame[y1+max(1,(y2-y1)//4):]=110
+        if mode=='empty_desk':frame[:]=110
         detector=DetectorYolo(args.model,640,adaptive=False);detector.setup()
         hands=HandsThread(detector.output.peek);hands.setup();detector.hand_provider=hands.output.peek
         try:
@@ -37,13 +40,14 @@ def main():
                 hand_result=hands.process(packet);hands.output.put(hand_result)
                 target=[b for b in result.phones if iou(coords(b),(x1,y1,x2,y2))>=.1]
                 rows.append(dict(scene=mode,seq=n,confirmed=any(b.confirmed and b.observed for b in target),
+                    roi=dict(region=result.detail_region,rect=result.detail_rect,imgsz=result.detail_inference_size),
                     candidates=[dict(conf=b.conf,bbox=coords(b)) for b in result.candidates],
                     hands=hand_result.boxes,tracks=[dict(conf=b.conf,bbox=coords(b),observed=b.observed,
                     confirmed=b.confirmed,support=b.support_kind) for b in target]))
                 time.sleep(.12)
         finally:hands.teardown()
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    args.output.write_text(json.dumps(dict(source='COCO128 repeated static photograph; artificial grey occluder',
+    args.output.write_text(json.dumps(dict(source='COCO128 repeated static photograph; artificial grey phone/desk occluder; NOT live webcam quality',
         image=args.image,model=args.model,target_bbox=[x1,y1,x2,y2],rows=rows),ensure_ascii=False,indent=2))
     print('Saved static probe:',args.output)
 

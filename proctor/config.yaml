@@ -28,6 +28,7 @@ yolo:
   conf_person: 0.5
   target_fps: 8
   detail_search: true
+  desk_search: true  # нижняя зона + общий поиск в том же ROI-бюджете
   device: auto
   offline: true
   phone_class: 67

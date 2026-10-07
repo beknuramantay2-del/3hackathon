@@ -10,7 +10,7 @@ class DetectorYolo(LatestWorker):
     def __init__(self,model_name="yolov8n.pt",imgsz=640,conf_phone=.25,
                  conf_person=.5,vote_window=8,vote_threshold=4,parent=None,
                  target_fps=8,device="auto",threads=2,offline=True,adaptive=True,
-                 phone_class=67,person_class=0,detail_search=True):
+                 phone_class=67,person_class=0,detail_search=True,desk_search=True):
         super().__init__(target_fps,parent,adaptive)
         self.model_name,self.imgsz=model_name,imgsz
         self.conf_phone,self.conf_person=conf_phone,conf_person
@@ -26,6 +26,11 @@ class DetectorYolo(LatestWorker):
         self.partial_evidence=PartialPhoneEvidence()
         self.calls=0
         self.tile=0
+        self.search_step=0
+        self.desk_search=desk_search
+        self.detail_region=""
+        self.detail_rect=None
+        self.detail_calls=0
 
     def setup(self):
         if self.offline and not os.path.isfile(self.model_name):
@@ -57,22 +62,26 @@ class DetectorYolo(LatestWorker):
                 persons.append(box)
         return phones,persons
 
-    def _detail_roi(self,frame,candidates):
-        h,w=frame.shape[:2]
-        previous=self.output.peek()
-        observed=candidates or ([b for b in previous.phones if b.observed] if previous else [])
+    def _detail_roi(self,frame,candidates,captured_at=None):
+        h,w=frame.shape[:2];previous=self.output.peek()
+        observed=[b for b in candidates if b.conf>=.12]
+        if not observed and previous is not None and captured_at is not None and 0<=captured_at-previous.captured_at<=.65:
+            observed=[b for b in previous.candidates if b.conf>=.12]
         if observed and self.calls%8!=0:
-            b=max(observed,key=lambda p:p.conf)
-            cx,cy=(b.x1+b.x2)/2,(b.y1+b.y2)/2
-            rw,rh=max(w*.35,(b.x2-b.x1)*3),max(h*.35,(b.y2-b.y1)*3)
-            x1,y1=max(0,int(cx-rw/2)),max(0,int(cy-rh/2))
-            x2,y2=min(w,int(cx+rw/2)),min(h,int(cy+rh/2))
+            b=max(observed,key=lambda p:p.conf);cx,cy=(b.x1+b.x2)/2,(b.y1+b.y2)/2
+            tiny=b.conf<.15 and min(b.x2-b.x1,b.y2-b.y1)<24
+            rw,rh=(max(120,w*.24,(b.x2-b.x1)*4),max(100,h*.30,(b.y2-b.y1)*4)) if tiny else (max(w*.35,(b.x2-b.x1)*3),max(h*.35,(b.y2-b.y1)*3))
+            x1,y1=max(0,int(cx-rw/2)),max(0,int(cy-rh/2));x2,y2=min(w,int(cx+rw/2)),min(h,int(cy+rh/2))
+            self.detail_region='candidate zoom' if tiny else 'candidate context'
+        elif self.desk_search and self.search_step%4!=3:
+            phase=self.search_step%4;left=(.31,0.,.62)[phase]
+            x1,y1=int(w*left),int(h*.55);x2,y2=min(w,x1+max(1,int(w*.38))),h
+            self.detail_region=('desk center','desk left','desk right')[phase];self.search_step+=1
         else:
-            # Search all four overlapping quadrants rather than assuming phone = lower body.
-            left,top=self.tile%2,self.tile//2
-            self.tile=(self.tile+1)%4
-            x1,y1=int(w*.4*left),int(h*.4*top)
-            x2,y2=min(w,x1+int(w*.6)),min(h,y1+int(h*.6))
+            left,top=self.tile%2,self.tile//2;self.tile=(self.tile+1)%4
+            x1,y1=int(w*.4*left),int(h*.4*top);x2,y2=min(w,x1+max(1,int(w*.6))),min(h,y1+max(1,int(h*.6)))
+            self.detail_region='full-frame quadrant';self.search_step+=1
+        self.detail_rect=(x1,y1,x2,y2)
         return frame[y1:y2,x1:x2],(x1,y1)
 
     def process(self,packet):
@@ -87,12 +96,15 @@ class DetectorYolo(LatestWorker):
         start=time.perf_counter()
         phones,persons=self._infer(packet.frame,self.budget.imgsz,[self.PHONE,self.PERSON])
         detail_time=0.
+        self.detail_region="";self.detail_rect=None;detail_size=0
         needs_detail=not phones or max(p.conf for p in phones)<.65 or any(min(p.x2-p.x1,p.y2-p.y1)<64 for p in phones)
         if self.detail_search and needs_detail and self.calls%2==0:
-            roi,origin=self._detail_roi(packet.frame,phones)
+            roi,origin=self._detail_roi(packet.frame,phones,packet.captured_at)
             if roi.size:
                 s=time.perf_counter()
-                detail,_=self._infer(roi,min(640,self.budget.imgsz+128),[self.PHONE],origin)
+                detail_size=min(640,self.budget.imgsz+128)
+                detail,_=self._infer(roi,detail_size,[self.PHONE],origin)
+                self.detail_calls+=1
                 detail_time=time.perf_counter()-s
                 phones.extend(detail)
         inferred=time.perf_counter()
@@ -113,7 +125,8 @@ class DetectorYolo(LatestWorker):
             b.confirmed=b.confirmed and (b.conf>=self.conf_phone or anchored or b.supported)
         voted=any(b.confirmed and b.observed for b in tracks)
         return YoloResult(phones=tracks,candidates=unique,n_persons=len(persons),persons=persons,
-            phone_voted=voted,inference_size=self.budget.imgsz,seq=packet.seq,captured_at=packet.captured_at,
+            phone_voted=voted,inference_size=self.budget.imgsz,detail_region=self.detail_region,
+            detail_rect=self.detail_rect,detail_inference_size=detail_size,seq=packet.seq,captured_at=packet.captured_at,
             processed_at=time.monotonic(),timings={"yolo":inferred-start,"detail_search":detail_time,
                 "postprocess":tracking_started-inferred,"tracker":time.perf_counter()-tracking_started})
 

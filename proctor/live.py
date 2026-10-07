@@ -58,7 +58,7 @@ def main():
     yolo=DetectorYolo(yc['model'],min(yc['imgsz'],profile['imgsz']) if adaptive else yc['imgsz'],
         yc['conf_phone'],yc['conf_person'],target_fps=min(yc['target_fps'],profile['yolo_fps']),
         device=yc.get('device','auto'),threads=profile['threads'],offline=yc.get('offline',True),adaptive=adaptive,
-        detail_search=yc.get('detail_search',True),phone_class=yc['phone_class'],person_class=yc['person_class'])
+        detail_search=yc.get('detail_search',True),desk_search=yc.get('desk_search',True),phone_class=yc['phone_class'],person_class=yc['person_class'])
     face=FaceMeshThread(fc['max_faces'],target_fps=min(fc.get('target_fps',15),profile['face_fps']),
         max_width=fc.get('max_width',640),min_detection_confidence=fc['min_detection_confidence'],
         min_tracking_confidence=fc['min_tracking_confidence'],adaptive=adaptive)
@@ -242,7 +242,8 @@ def main():
         window.highlight_gaze(bool(engine.calib) and calibration is None and any(k.startswith('GAZE_') for k in d.get('warnings_active',[])))
         if d.get('gaze')=='UNKNOWN':window.gaze_card.note.setText(f.gaze_reason or 'Нет свежего измерения глаз')
         seconds=int(now-started);window.session_clock.setText(f'{seconds//60:02}:{seconds%60:02}')
-        window.mode_label.setText('Защищённый режим' if guard_on else 'Просмотр CV · защита выключена')
+        guard_workers=guard_on and hk.status=='active' and fw.isRunning() and pw.isRunning()
+        window.mode_label.setText('Режим защиты' if guard_workers else 'Защита неполная / запускается' if guard_on else 'Просмотр CV · защита выключена')
         errors=[type(w).__name__+': '+w.error for w in workers if w.status=='error']
         if not calibration:
             source='Видео · не физическая камера' if args.video else 'Камера'
@@ -257,12 +258,14 @@ def main():
         gates=d.get('gaze_entry_gates',{})
         gate_text=' / '.join(f'{gates[k]:.3f}' if k in gates else '—' for k in ('LEFT','RIGHT','UP','DOWN'))
         confidence=f'{pmax:.2f}' if pmax is not None and yf else 'нет свежего кандидата'
-        recovery=any(p.confirmed and p.observed and p.conf<yolo.conf_phone for p in y.phones)
+        recovery=any(p.confirmed and p.observed and p.conf<yolo.conf_phone and p.strong_at is not None and now-p.strong_at<=.8 for p in y.phones)
+        support=', '.join(sorted({p.support_kind for p in y.phones if p.observed and p.confirmed and p.support_kind}))
         window.measurements.setText(f'HEAD Δ yaw / pitch: {head_numbers}\n'
             f'GAZE Δ H / V: {gaze_numbers}; глаз L {left}, R {right}\n'
             f'HEAD вход: yaw {t.get("yaw")}° / pitch {t.get("pitch")}°; выход 70% порога\n'
             f'GAZE вход L/R/U/D: {gate_text}\n'
-            f'Phone P={confidence}; новый track ≥ {yolo.conf_phone:.2f}; imgsz {yolo.budget.imgsz}'+(' · weak recovery: strong ≤0.8с' if recovery else '')+'\n'
+            f'Phone P={confidence}; новый track ≥ {yolo.conf_phone:.2f}; imgsz {yolo.budget.imgsz}'+(' · weak recovery: strong ≤0.8с' if recovery else '')+(' · подтверждение: '+support if support else '')+'\n'
+            f'ROI: {y.detail_region or "не запускалась в этом цикле"}; размер {y.detail_inference_size or "—"}; всего запусков {yolo.detail_calls}\n'
             f'HEAD quality: {"valid" if f.pose_valid and ff else f.pose_reason or "нет свежего измерения"}; GAZE: {f.gaze_reason or "нет измерения"}')
         active=[(rule.active_duration(now)/max(.01,rule.hold),key,rule) for key,rule in engine.rules.items() if d['conds'].get(key) and (not key.startswith(('HEAD_','GAZE_')) or engine.calib)]
         gaze_active=[a for a in active if a[1].startswith('GAZE_')]
@@ -292,7 +295,7 @@ def main():
         for key in ('ALT','WIN','SHOT'):
             window.set_case(key,guard_status+(' · не все способы screenshot' if key=='SHOT' else ''))
         window.set_case('COPY',guard_status+(' · clipboard active' if guard_on else ' · буфер не блокируется в dev'))
-        window.set_case('WINDOWS',('watchdog/focus активны; только новые процессы' if guard_on else 'НЕ АКТИВНО в CV/dev'))
+        window.set_case('WINDOWS',(('Потоки фокуса/процессов работают; только новые процессы, не полный kiosk' if fw.isRunning() and pw.isRunning() else 'НЕ АКТИВНО: worker защиты остановлен / запускается') if guard_on else 'НЕ АКТИВНО в CV/dev'))
         window.set_case('TABS','Нет браузера в этом режиме. Защита вкладок — --embedded-test')
         age=lambda r: f'{(now-r.captured_at)*1000:.0f}ms' if r.seq>=0 else '—'
         camera_rate=cam.camera_fps if packet and now-packet.captured_at<1 else 0.
@@ -334,7 +337,8 @@ def main():
             case_status={key:window.checklist.item(row,1).text() for key,row in window.rows.items()},
             calibration=engine.calib.get('mode'),guard=hk.status,
             effective_holds={key:rule.hold for key,rule in engine.rules.items()},
-            gaze_entry_gates=engine.debug.get('gaze_entry_gates'),
+            gaze_entry_gates=engine.debug.get('gaze_entry_gates'),detail_calls=yolo.detail_calls,
+            preview=dict(image_size=[window.camera.image_rect.width(),window.camera.image_rect.height()],window_size=[window.width(),window.height()]),
             phone_evidence=[dict(conf=p.conf,support=p.support_kind,observed=p.observed,confirmed=p.confirmed) for p in engine.yolo.phones]),ensure_ascii=False,indent=2))
         store.close();lock.unlock()
     app.aboutToQuit.connect(cleanup)

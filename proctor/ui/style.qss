@@ -4,7 +4,7 @@ QWidget#panel, QFrame#panel { background: #192335; border: 1px solid #344258; bo
 QLabel#title { font-size: 24px; font-weight: 600; color: #f2f6fc; }
 QLabel#sectionTitle { font-size: 18px; font-weight: 600; color: #f2f6fc; }
 QLabel#eyebrow { color: #a5b3c9; font-size: 14px; font-weight: 600; }
-QLabel#directionValue { font-size: 23px; font-weight: 600; color: #f2f6fc; }
+QLabel#directionValue { font-size: 18px; font-weight: 600; color: #f2f6fc; }
 QLabel#muted { color: #a5b3c9; }
 QLabel#diagnosticText { color: #b9c7da; font-size: 14px; }
 QLabel#clock { font-size: 24px; font-weight: 600; padding-left: 12px; }

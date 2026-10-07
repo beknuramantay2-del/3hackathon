@@ -50,6 +50,9 @@ class YoloResult:
     phone_voted: bool = False
     candidates: list = field(default_factory=list)
     inference_size: int = 0
+    detail_region: str = ""
+    detail_rect: tuple | None = None
+    detail_inference_size: int = 0
     seq: int = -1
     captured_at: float = 0.0
     processed_at: float = 0.0

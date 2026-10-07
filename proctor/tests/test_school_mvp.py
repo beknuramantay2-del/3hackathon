@@ -107,7 +107,7 @@ def test_school_window_direction_cases_and_controls():
     w=MonitorWindow();w.resize(1280,800);w.show();app.processEvents()
     w.show_directions('CENTER','DOWN',True)
     assert 'Вниз' in w.gaze_card.state.text() and 'Прямо' in w.head_card.state.text()
-    assert 'ГЛАЗА ↓ Вниз' in w.camera.hud.text()
+    assert 'ГЛАЗА: ↓ Вниз' in w.gaze_card.state.text()
     assert len(w.rows)==17 and w.tabs.count()==3
     assert w.down_hold.value()==3 and w.gaze_hold.value()==2
     w.show_target('LEFT');app.processEvents()
