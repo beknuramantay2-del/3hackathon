@@ -1,4 +1,3 @@
-"""Тексты интерфейса из strings.yaml."""
 import os
 import yaml
 

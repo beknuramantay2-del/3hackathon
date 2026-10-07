@@ -1,4 +1,3 @@
-"""Focus watchdog every 300ms: if foreground != our window -> FOCUS_LOST + refocus."""
 from PyQt6.QtCore import QThread, pyqtSignal
 from .security import FULL_GUARD, OS
 
@@ -23,6 +22,7 @@ class FocusWatch(QThread):
             print("[focus] pywin32 missing, watchdog limited")
             return
         import win32gui
+
         while self._run:
             if not self.enabled:
                 self.msleep(100)

@@ -1,4 +1,3 @@
-"""Запись пароля экзаменатора в config.yaml (только соль и хеш PBKDF2-HMAC-SHA256)."""
 import binascii
 import getpass
 import hashlib
@@ -23,10 +22,16 @@ def patch(path, salt, digest, iterations):
             if s.strip().startswith(key + ":"):
                 targets[key] = i
     if not all(k in targets for k in ("salt_hex", "hash_hex", "iterations")):
-        raise SystemExit("config.yaml: нет полей salt_hex/hash_hex/iterations в 'examiner'")
-    for key, value in (("salt_hex", salt), ("hash_hex", digest), ("iterations", str(iterations))):
+        raise SystemExit(
+            "config.yaml: нет полей salt_hex/hash_hex/iterations в 'examiner'"
+        )
+    for key, value in (
+        ("salt_hex", salt),
+        ("hash_hex", digest),
+        ("iterations", str(iterations)),
+    ):
         i = targets[key]
-        indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+        indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
         quote = "" if key == "iterations" else '"'
         lines[i] = f"{indent}{key}: {quote}{value}{quote}\n"
     with open(path, "w", encoding="utf-8") as f:
@@ -35,11 +40,16 @@ def patch(path, salt, digest, iterations):
 
 def main():
     import argparse
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--iterations", type=int, default=100000)
     a = ap.parse_args()
-    path = a.config or ("proctor/config.yaml" if os.path.exists("proctor/config.yaml") else "config.yaml")
+    path = a.config or (
+        "proctor/config.yaml"
+        if os.path.exists("proctor/config.yaml")
+        else "config.yaml"
+    )
     first = getpass.getpass("Новый пароль экзаменатора: ")
     second = getpass.getpass("Повторите пароль: ")
     if not first:
@@ -47,7 +57,9 @@ def main():
     if first != second:
         raise SystemExit("пароли не совпадают")
     salt = binascii.hexlify(os.urandom(16)).decode()
-    digest = hashlib.pbkdf2_hmac("sha256", first.encode("utf-8"), bytes.fromhex(salt), a.iterations).hex()
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", first.encode("utf-8"), bytes.fromhex(salt), a.iterations
+    ).hex()
     patch(path, salt, digest, a.iterations)
     print(f"записано: {path}")
 

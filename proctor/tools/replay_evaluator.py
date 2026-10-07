@@ -1,16 +1,12 @@
-"""Прогон видео через YOLO + FaceMesh + RuleEngine и сверка с разметкой GT.
-
-Метрики: precision/recall/latency на тип, общий weighted_f1.
-Калибровка: five (20с поз как в UI), center (5с прямо) или none.
-Center/none не доказывают качество персональных порогов. Шкала: метки видео.
-"""
 import argparse
 import json
 import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 
 from proctor.core.config import load_config, ConfigError
 from proctor.core.rules import RuleEngine
@@ -19,68 +15,96 @@ from proctor.core.calibration import Calibration
 
 TOL = 0.5
 
+
 def run(video, cfg, calibration_mode="five"):
     import cv2
     from proctor.core.pipeline import FramePacket
     from proctor.core.face_mesh import FaceMeshThread
     from proctor.core.detector_yolo import DetectorYolo
     from proctor.core.hands import HandsThread
+
     cap = cv2.VideoCapture(video)
     if not cap.isOpened():
         raise ValueError(f"Нет видеофайла: {video}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.
-    yc,fc = cfg["yolo"],cfg["face"]
-    yolo = DetectorYolo(yc["model"],yc["imgsz"],yc["conf_phone"],yc["conf_person"],
-                        offline=True,adaptive=False,phone_class=yc["phone_class"],person_class=yc["person_class"])
-    face = FaceMeshThread(fc["max_faces"],max_width=fc.get("max_width",640),
-                          min_detection_confidence=fc["min_detection_confidence"],
-                          min_tracking_confidence=fc["min_tracking_confidence"])
-    latest = {"yolo":None}
-    hands = HandsThread(lambda:latest["yolo"]) if fc.get("hands_enabled",True) else None
-    workers = [yolo,face]+([hands] if hands else [])
-    eng = RuleEngine(cfg,{})
-    seconds = cfg["calibration"]["duration_sec"] if calibration_mode == "five" else (5. if calibration_mode == "center" else 0.)
-    calib = Calibration(seconds or 20.)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    yc, fc = cfg["yolo"], cfg["face"]
+    yolo = DetectorYolo(
+        yc["model"],
+        yc["imgsz"],
+        yc["conf_phone"],
+        yc["conf_person"],
+        offline=True,
+        adaptive=False,
+        phone_class=yc["phone_class"],
+        person_class=yc["person_class"],
+    )
+    face = FaceMeshThread(
+        fc["max_faces"],
+        max_width=fc.get("max_width", 640),
+        min_detection_confidence=fc["min_detection_confidence"],
+        min_tracking_confidence=fc["min_tracking_confidence"],
+    )
+    latest = {"yolo": None}
+    hands = (
+        HandsThread(lambda: latest["yolo"]) if fc.get("hands_enabled", True) else None
+    )
+    workers = [yolo, face] + ([hands] if hands else [])
+    eng = RuleEngine(cfg, {})
+    seconds = (
+        cfg["calibration"]["duration_sec"]
+        if calibration_mode == "five"
+        else (5.0 if calibration_mode == "center" else 0.0)
+    )
+    calib = Calibration(seconds or 20.0)
     base = time.monotonic()
     calib.start(base)
-    next_yolo = next_face = next_hands = 0.
+    next_yolo = next_face = next_hands = 0.0
     calibrated = calibration_mode == "none"
-    fired,i = [],0
+    fired, i = [], 0
     try:
         for w in workers:
             w.setup()
         while True:
-            ok,fr = cap.read()
+            ok, fr = cap.read()
             if not ok:
                 break
-            t = i/fps
-            packet = FramePacket(i,base+t,fr,t)
+            t = i / fps
+            packet = FramePacket(i, base + t, fr, t)
             i += 1
             if t >= next_yolo:
                 latest["yolo"] = yolo.process(packet)
                 eng.on_yolo(latest["yolo"])
-                next_yolo = t+1/yc["target_fps"]
+                next_yolo = t + 1 / yc["target_fps"]
             if t >= next_face:
                 f = face.process(packet)
                 eng.on_face(f)
-                next_face = t+1/fc.get("target_fps",15)
-                if not calibrated and t < seconds and f.n_faces == 1 and f.pose_valid and f.gaze_valid:
+                next_face = t + 1 / fc.get("target_fps", 15)
+                if (
+                    not calibrated
+                    and t < seconds
+                    and f.n_faces == 1
+                    and f.pose_valid
+                    and f.gaze_valid
+                ):
                     if calibration_mode == "five":
-                        calib.add(f.yaw,f.pitch,f.iris_h,f.iris_v,now=base+t)
-                    elif t >= .7:
-                        calib.add(f.yaw,f.pitch,f.iris_h,f.iris_v,pose="CENTER")
+                        calib.add(f.yaw, f.pitch, f.iris_h, f.iris_v, now=base + t)
+                    elif t >= 0.7:
+                        calib.add(f.yaw, f.pitch, f.iris_h, f.iris_v, pose="CENTER")
             if hands and t >= next_hands:
                 eng.on_hands(hands.process(packet))
-                next_hands = t+1/fc.get("hands_fps",5)
+                next_hands = t + 1 / fc.get("hands_fps", 5)
             if not calibrated and t >= seconds:
                 eng.calib = calib.finish(center_only=calibration_mode == "center")
                 if calibration_mode == "five" and eng.calib["unresolved_targets"]:
-                    raise ValueError("Не измерены позы калибровки: "+str(eng.calib["unresolved_targets"]))
+                    raise ValueError(
+                        "Не измерены позы калибровки: "
+                        + str(eng.calib["unresolved_targets"])
+                    )
                 eng.reset()
                 calibrated = True
             if calibrated:
-                for kind in eng.tick(base+t):
-                    fired.append({"type":kind,"t":round(t,2)})
+                for kind in eng.tick(base + t):
+                    fired.append({"type": kind, "t": round(t, 2)})
         if not calibrated:
             raise ValueError("Видео короче калибровки или калибровка не пройдена")
     finally:
@@ -108,7 +132,10 @@ def match(fired, gt):
         tp = 0
         for d in dets:
             for gi, g in enumerate(items):
-                if gi not in matched and g["t_start"] - TOL <= d["t"] <= g["t_end"] + TOL:
+                if (
+                    gi not in matched
+                    and g["t_start"] - TOL <= d["t"] <= g["t_end"] + TOL
+                ):
                     matched.add(gi)
                     tp += 1
                     lat.append(round(d["t"] - g["t_start"], 2))
@@ -119,12 +146,19 @@ def match(fired, gt):
         rec = tp / len(items) if items else 0.0
         f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
         f1w += f1 * len(items)
-        out[t] = {"precision": round(prec, 2), "recall": round(rec, 2),
-                  "avg_latency_sec": round(sum(lat) / len(lat), 2) if lat else None,
-                  "false_positives": fp, "fn": fn}
+        out[t] = {
+            "precision": round(prec, 2),
+            "recall": round(rec, 2),
+            "avg_latency_sec": round(sum(lat) / len(lat), 2) if lat else None,
+            "false_positives": fp,
+            "fn": fn,
+        }
         tp_total += tp
-    out["overall"] = {"weighted_f1": round(f1w / len(gt), 2) if gt else 0.0,
-                      "total_events": len(gt), "detected": tp_total}
+    out["overall"] = {
+        "weighted_f1": round(f1w / len(gt), 2) if gt else 0.0,
+        "total_events": len(gt),
+        "detected": tp_total,
+    }
     return out
 
 
@@ -144,8 +178,12 @@ def main():
     gt = json.load(open(a.gt, encoding="utf-8"))
     fired = run(a.video, cfg, a.calibration)
     metrics = match(fired, gt)
-    json.dump({"detections": fired, "metrics": metrics, "calibration": a.calibration}, open(a.output, "w", encoding="utf-8"),
-              ensure_ascii=False, indent=1)
+    json.dump(
+        {"detections": fired, "metrics": metrics, "calibration": a.calibration},
+        open(a.output, "w", encoding="utf-8"),
+        ensure_ascii=False,
+        indent=1,
+    )
     print(json.dumps(metrics, ensure_ascii=False, indent=1))
 
 

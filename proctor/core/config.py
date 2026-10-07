@@ -1,4 +1,3 @@
-"""Загрузка и проверка config.yaml. Ошибка сообщает имя поля, дефолтов нет."""
 import os
 import yaml
 
@@ -26,16 +25,29 @@ def _need_list(cfg, path, item_type):
     for i, v in enumerate(items):
         if not isinstance(v, item_type):
             want = getattr(item_type, "__name__", str(item_type))
-            raise ConfigError(f"{NAME}: поле '{'.'.join(path)}[{i}]' должно быть {want}")
+            raise ConfigError(
+                f"{NAME}: поле '{'.'.join(path)}[{i}]' должно быть {want}"
+            )
     return items
 
 
-_RULES = ("phone_detected", "phone_raised", "phone_aimed", "gaze_down",
-          "gaze_side", "no_face", "multi_face", "camera_covered")
+_RULES = (
+    "phone_detected",
+    "phone_raised",
+    "phone_aimed",
+    "gaze_down",
+    "gaze_side",
+    "no_face",
+    "multi_face",
+    "camera_covered",
+)
 _THRESHOLDS = {
     "gaze_down": (("pitch_thresh", (int, float)),),
     "gaze_side": (("yaw_thresh", (int, float)), ("iris_thresh", (int, float))),
-    "camera_covered": (("brightness_thresh", (int, float)), ("variance_thresh", (int, float))),
+    "camera_covered": (
+        ("brightness_thresh", (int, float)),
+        ("variance_thresh", (int, float)),
+    ),
 }
 
 
@@ -45,7 +57,9 @@ def _check_rule(cfg, name):
     for key in ("hold", "cooldown"):
         v = _need(cfg, base + (key,), (int, float))
         if v < 0:
-            raise ConfigError(f"{NAME}: поле '{'.'.join(base + (key,))}' должно быть >= 0")
+            raise ConfigError(
+                f"{NAME}: поле '{'.'.join(base + (key,))}' должно быть >= 0"
+            )
     for key, types in _THRESHOLDS.get(name, ()):
         _need(cfg, base + (key,), types)
     return enabled
@@ -74,12 +88,17 @@ def load_config(path=None, profile=None, require_test_url=True):
     url = _need(cfg, ("test", "test_url"), str)
     domains = _need_list(cfg, ("test", "allowed_domains"), str)
     if prof == "exam" and require_test_url and not url.strip():
-        raise ConfigError(f"{NAME}: в профиле exam поле 'test.test_url' не должно быть пустым")
+        raise ConfigError(
+            f"{NAME}: в профиле exam поле 'test.test_url' не должно быть пустым"
+        )
     if url.strip() and not os.path.isfile(url):
         from urllib.parse import urlparse as _up
+
         parts = _up(url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
-            raise ConfigError(f"{NAME}: поле 'test.test_url' должно быть путем к файлу или http(s) URL")
+            raise ConfigError(
+                f"{NAME}: поле 'test.test_url' должно быть путем к файлу или http(s) URL"
+            )
 
     cam = _need(cfg, ("camera",), dict)
     _need(cfg, ("camera", "index"), int)
@@ -90,7 +109,13 @@ def load_config(path=None, profile=None, require_test_url=True):
     _need(cfg, ("camera", "mirror_preview"), bool)
 
     _need(cfg, ("yolo", "model"), str)
-    for key in ("imgsz", "vote_window", "vote_threshold", "phone_class", "person_class"):
+    for key in (
+        "imgsz",
+        "vote_window",
+        "vote_threshold",
+        "phone_class",
+        "person_class",
+    ):
         _need(cfg, ("yolo", key), int)
     for key in ("conf_phone", "conf_person", "target_fps"):
         _need(cfg, ("yolo", key), (int, float))
@@ -104,17 +129,23 @@ def load_config(path=None, profile=None, require_test_url=True):
 
     mode = _need(cfg, ("guard", "process_mode"), str)
     if mode not in ("close", "log"):
-        raise ConfigError(f"{NAME}: поле 'guard.process_mode' должно быть close или log")
+        raise ConfigError(
+            f"{NAME}: поле 'guard.process_mode' должно быть close или log"
+        )
     _need_list(cfg, ("guard", "forbidden_processes"), str)
     _need_list(cfg, ("guard", "hotkeys"), str)
     _need(cfg, ("guard", "exit_combo"), str)
     _need(cfg, ("guard", "examiner", "salt_hex"), str)
     _need(cfg, ("guard", "examiner", "hash_hex"), str)
     _need(cfg, ("guard", "examiner", "iterations"), int)
-    if prof == "exam" and not (cfg["guard"]["exit_combo"].strip()
-                               and cfg["guard"]["examiner"]["salt_hex"]
-                               and cfg["guard"]["examiner"]["hash_hex"]):
-        raise ConfigError(f"{NAME}: в профиле exam задайте guard.exit_combo и guard.examiner.salt_hex/hash_hex")
+    if prof == "exam" and not (
+        cfg["guard"]["exit_combo"].strip()
+        and cfg["guard"]["examiner"]["salt_hex"]
+        and cfg["guard"]["examiner"]["hash_hex"]
+    ):
+        raise ConfigError(
+            f"{NAME}: в профиле exam задайте guard.exit_combo и guard.examiner.salt_hex/hash_hex"
+        )
 
     _need(cfg, ("store", "db"), str)
     _need(cfg, ("store", "screenshots"), str)
@@ -122,7 +153,9 @@ def load_config(path=None, profile=None, require_test_url=True):
 
     host = _need(cfg, ("examiner", "host"), str)
     if host not in ("127.0.0.1", "localhost"):
-        raise ConfigError(f"{NAME}: поле 'examiner.host' разрешено только 127.0.0.1 или localhost")
+        raise ConfigError(
+            f"{NAME}: поле 'examiner.host' разрешено только 127.0.0.1 или localhost"
+        )
     port = _need(cfg, ("examiner", "port"), int)
     if not 1024 <= port <= 65535:
         raise ConfigError(f"{NAME}: поле 'examiner.port' должно быть 1024-65535")
@@ -138,16 +171,25 @@ def load_config(path=None, profile=None, require_test_url=True):
     weights = _need(cfg, ("trust_weights",), dict)
     for k, v in weights.items():
         if not isinstance(v, (int, float)) or v < 0:
-            raise ConfigError(f"{NAME}: поле 'trust_weights.{k}' должно быть числом >= 0")
+            raise ConfigError(
+                f"{NAME}: поле 'trust_weights.{k}' должно быть числом >= 0"
+            )
 
-    # Runtime budgets must be valid: no division by zero or impossible voting windows.
-    for section, key in (("yolo", "imgsz"), ("yolo", "target_fps"), ("yolo", "vote_window"),
-                         ("face", "max_faces"), ("calibration", "duration_sec")):
+    for section, key in (
+        ("yolo", "imgsz"),
+        ("yolo", "target_fps"),
+        ("yolo", "vote_window"),
+        ("face", "max_faces"),
+        ("calibration", "duration_sec"),
+    ):
         if cfg[section][key] <= 0:
             raise ConfigError(f"{NAME}: {section}.{key} должно быть > 0")
     if cfg["face"]["max_faces"] < 2:
         raise ConfigError(f"{NAME}: face.max_faces >= 2 для Кейс №3")
-    if cfg["yolo"]["vote_threshold"] < 1 or cfg["yolo"]["vote_threshold"] > cfg["yolo"]["vote_window"]:
+    if (
+        cfg["yolo"]["vote_threshold"] < 1
+        or cfg["yolo"]["vote_threshold"] > cfg["yolo"]["vote_window"]
+    ):
         raise ConfigError(f"{NAME}: неверные параметры vote_threshold/vote_window")
     for key in ("conf_phone", "conf_person"):
         if not 0 < cfg["yolo"][key] <= 1:
@@ -155,24 +197,43 @@ def load_config(path=None, profile=None, require_test_url=True):
     perf = cfg.get("performance", {})
     if perf.get("mode", "auto") not in ("auto", "weak", "balanced"):
         raise ConfigError(f"{NAME}: performance.mode должно быть auto/weak/balanced")
-    for section,key,default in (("face","target_fps",15),("face","hands_fps",5),
-                                ("face","max_width",640),("performance","threads",2)):
-        value = cfg.get(section,{}).get(key,default)
-        if isinstance(value,bool) or not isinstance(value,(int,float)) or value <= 0:
+    for section, key, default in (
+        ("face", "target_fps", 15),
+        ("face", "hands_fps", 5),
+        ("face", "max_width", 640),
+        ("performance", "threads", 2),
+    ):
+        value = cfg.get(section, {}).get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
             raise ConfigError(f"{NAME}: {section}.{key} должно быть > 0")
     if cfg["calibration"]["duration_sec"] != 30:
-        raise ConfigError(f"{NAME}: calibration.duration_sec = 30: отдельно 15 с головы + 15 с глаз")
-    pc=cfg.get('policy',{})
-    yellow,red=pc.get('yellow_sec',3.),pc.get('red_sec',5.)
-    if not isinstance(yellow,(int,float)) or not isinstance(red,(int,float)) or not .5<=yellow<red<=30:
+        raise ConfigError(
+            f"{NAME}: calibration.duration_sec = 30: отдельно 15 с головы + 15 с глаз"
+        )
+    pc = cfg.get("policy", {})
+    yellow, red = pc.get("yellow_sec", 3.0), pc.get("red_sec", 5.0)
+    if (
+        not isinstance(yellow, (int, float))
+        or not isinstance(red, (int, float))
+        or not 0.5 <= yellow < red <= 30
+    ):
         raise ConfigError(f"{NAME}: policy: 0.5 <= yellow_sec < red_sec <= 30")
-    immediate=pc.get('immediate_phone_conf',.55)
-    if not isinstance(immediate,(int,float)) or not .3<=immediate<=1:
+    immediate = pc.get("immediate_phone_conf", 0.55)
+    if not isinstance(immediate, (int, float)) or not 0.3 <= immediate <= 1:
         raise ConfigError(f"{NAME}: policy.immediate_phone_conf в [0.3,1]")
-    ec=cfg.get('evidence',{})
-    for key,default,low,high in (('fps',5,1,10),('pre_sec',2.,0,5),('post_sec',2.,0,5),('segment_sec',15.,5,60)):
-        value=ec.get(key,default)
-        if isinstance(value,bool) or not isinstance(value,(int,float)) or not low<=value<=high:
+    ec = cfg.get("evidence", {})
+    for key, default, low, high in (
+        ("fps", 5, 1, 10),
+        ("pre_sec", 2.0, 0, 5),
+        ("post_sec", 2.0, 0, 5),
+        ("segment_sec", 15.0, 5, 60),
+    ):
+        value = ec.get(key, default)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not low <= value <= high
+        ):
             raise ConfigError(f"{NAME}: evidence.{key} в [{low},{high}]")
 
     cfg["profile"] = prof
@@ -183,8 +244,9 @@ def load_config(path=None, profile=None, require_test_url=True):
 
 
 def ensure_hash_salt(cfg):
-    """Генерирует salt_hex для hash_chain при первом старте. Правит только свою строку."""
+
     import binascii
+
     salt = binascii.hexlify(os.urandom(16)).decode()
     path = cfg.get("_path", "")
     try:
@@ -205,7 +267,7 @@ def ensure_hash_salt(cfg):
             break
     if target is None:
         raise ConfigError(f"{NAME}: нет поля 'hash_chain.salt_hex', задайте вручную")
-    indent = lines[target][:len(lines[target]) - len(lines[target].lstrip())]
+    indent = lines[target][: len(lines[target]) - len(lines[target].lstrip())]
     lines[target] = f'{indent}salt_hex: "{salt}"\n'
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)

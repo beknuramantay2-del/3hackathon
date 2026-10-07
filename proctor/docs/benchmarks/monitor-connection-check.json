@@ -1,0 +1,17 @@
+{
+  "suite": "201 passed in 25.89s",
+  "environment": "Linux sandbox, Qt offscreen",
+  "checks": [
+    "Client producer in separate subprocess -> privileged SchoolDB connection -> fresh JPEG and head/gaze status",
+    "Student access rejected",
+    "Stale, future, corrupt, oversized snapshots rejected",
+    "Independent monitor/client locks and duplicate-client rejection",
+    "Native authenticated exam -> fresh observer frame -> HTML/WebChannel answers -> SQLite, with explicit test calibration"
+  ],
+  "limits": [
+    "Not a target-camera accuracy test",
+    "No physical Windows shortcut/window test",
+    "No measured i5-4200M/8GB run",
+    "No simultaneous multi-PC monitoring"
+  ]
+}

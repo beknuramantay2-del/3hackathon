@@ -1,4 +1,3 @@
-"""HTTP-панель экзаменатора на 127.0.0.1: события, статус, индекс, кнопка завершения."""
 import os
 import sqlite3
 import threading
@@ -13,14 +12,16 @@ from proctor.core.trust_score import TrustCalculator
 
 T = load_strings()
 
-CSS = ("body{font-family:'Segoe UI',Arial,sans-serif;font-size:14px;background:#F5F5F5;color:#1A1A1A;margin:0;padding:16px}"
-       ".panel{background:#FFFFFF;border:1px solid #CCCCCC;border-radius:2px;padding:16px;margin-bottom:16px}"
-       "h1{font-size:18px;margin:0 0 8px 0}p{margin:4px 0}"
-       "table{width:100%;border-collapse:collapse;background:#FFFFFF}"
-       "th,td{border:1px solid #CCCCCC;padding:8px;text-align:left;font-size:14px}th{font-weight:bold}"
-       "tr.new td{background:#FDECEA}"
-       "button{background:#2B579A;color:#FFFFFF;border:1px solid #2B579A;border-radius:2px;padding:8px 16px;font-size:14px}"
-       "img.thumb{width:160px;height:120px;object-fit:cover;border:1px solid #CCCCCC;display:block}")
+CSS = (
+    "body{font-family:'Segoe UI',Arial,sans-serif;font-size:14px;background:#F5F5F5;color:#1A1A1A;margin:0;padding:16px}"
+    ".panel{background:#FFFFFF;border:1px solid #CCCCCC;border-radius:2px;padding:16px;margin-bottom:16px}"
+    "h1{font-size:18px;margin:0 0 8px 0}p{margin:4px 0}"
+    "table{width:100%;border-collapse:collapse;background:#FFFFFF}"
+    "th,td{border:1px solid #CCCCCC;padding:8px;text-align:left;font-size:14px}th{font-weight:bold}"
+    "tr.new td{background:#FDECEA}"
+    "button{background:#2B579A;color:#FFFFFF;border:1px solid #2B579A;border-radius:2px;padding:8px 16px;font-size:14px}"
+    "img.thumb{width:160px;height:120px;object-fit:cover;border:1px solid #CCCCCC;display:block}"
+)
 
 
 class ExaminerServer:
@@ -41,7 +42,8 @@ class ExaminerServer:
         try:
             con = sqlite3.connect(self.db_path)
             rows = con.execute(
-                "SELECT type,severity,t_start,duration,screenshot FROM events ORDER BY t_start").fetchall()
+                "SELECT type,severity,t_start,duration,screenshot FROM events ORDER BY t_start"
+            ).fetchall()
             con.close()
             return rows
         except Exception:
@@ -49,6 +51,7 @@ class ExaminerServer:
 
     def _trust(self, rows, t0):
         from types import SimpleNamespace
+
         calc = TrustCalculator(self.weights)
         for typ, sev, ts, dur, shot in rows:
             calc.apply_violation(SimpleNamespace(type=typ, severity=sev, t_start=ts))
@@ -65,23 +68,32 @@ class ExaminerServer:
             mmss = f"{s // 60:02d}:{s % 60:02d}"
             base = os.path.basename(shot or "")
             full = os.path.join(self.shots_dir, base)
-            thumb = (f'<img class="thumb" src="/shots/{base}" alt="Кадр">'
-                     if base and os.path.exists(full) else T["no_frame"])
+            thumb = (
+                f'<img class="thumb" src="/shots/{base}" alt="Кадр">'
+                if base and os.path.exists(full)
+                else T["no_frame"]
+            )
             cls = ' class="new"' if i == len(rows) - 1 else ""
             items += f"<tr{cls}><td>{mmss}</td><td>{typ}</td><td>{dur:.0f} с</td><td>{thumb}</td></tr>"
         if not items:
             items = f'<tr><td colspan="4">{T["no_violations"]}</td></tr>'
-        table = (f"<table><tr><th>{T['th_time']}</th><th>{T['th_type']}</th>"
-                 f"<th>{T['th_duration']}</th><th>{T['th_shot']}</th></tr>{items}</table>")
-        head = (f'<div class="panel"><h1>{T["examiner_title"]}: {escape(self.get_fio() or T["student"])}</h1>'
-                f"<p>{T['violations']}: <b>{len(rows)}</b></p>"
-                f"<p>{T['session_status']}: {escape(self.get_status())}</p>"
-                f"<p>{T['trust_score']}: {trust['trust_score']}/100.</p>"
-                f'<form method="post" action="/finish"><input type="hidden" name="csrf" value="{self.csrf}"><button type="submit">{T["examiner_finish"]}</button></form></div>')
-        return (f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
-                f'<meta http-equiv="refresh" content="1">'
-                f"<title>{T['examiner_title']}</title><style>{CSS}</style></head>"
-                f"<body>{head}<div class=\"panel\">{table}</div></body></html>").encode("utf-8")
+        table = (
+            f"<table><tr><th>{T['th_time']}</th><th>{T['th_type']}</th>"
+            f"<th>{T['th_duration']}</th><th>{T['th_shot']}</th></tr>{items}</table>"
+        )
+        head = (
+            f'<div class="panel"><h1>{T["examiner_title"]}: {escape(self.get_fio() or T["student"])}</h1>'
+            f"<p>{T['violations']}: <b>{len(rows)}</b></p>"
+            f"<p>{T['session_status']}: {escape(self.get_status())}</p>"
+            f"<p>{T['trust_score']}: {trust['trust_score']}/100.</p>"
+            f'<form method="post" action="/finish"><input type="hidden" name="csrf" value="{self.csrf}"><button type="submit">{T["examiner_finish"]}</button></form></div>'
+        )
+        return (
+            f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
+            f'<meta http-equiv="refresh" content="1">'
+            f"<title>{T['examiner_title']}</title><style>{CSS}</style></head>"
+            f'<body>{head}<div class="panel">{table}</div></body></html>'
+        ).encode("utf-8")
 
     def start(self):
         server = self
@@ -93,7 +105,7 @@ class ExaminerServer:
             def do_GET(self):
                 parsed = urlparse(self.path)
                 if parsed.path.startswith("/shots/"):
-                    name = os.path.basename(unquote(parsed.path[len("/shots/"):]))
+                    name = os.path.basename(unquote(parsed.path[len("/shots/") :]))
                     full = os.path.join(server.shots_dir, name)
                     if name and os.path.exists(full):
                         self.send_response(200)
@@ -120,7 +132,9 @@ class ExaminerServer:
                     if not 0 < length <= 1024:
                         self.send_error(403)
                         return
-                    values = parse_qs(self.rfile.read(length).decode("utf-8", errors="replace"))
+                    values = parse_qs(
+                        self.rfile.read(length).decode("utf-8", errors="replace")
+                    )
                     token = values.get("csrf", [""])[0]
                     if not secrets.compare_digest(token, server.csrf):
                         self.send_error(403)

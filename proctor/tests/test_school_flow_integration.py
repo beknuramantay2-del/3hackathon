@@ -1,26 +1,45 @@
-"""Opt-in native exam/HTML/bridge/SQLite E2E. Calibration is an explicit stub!
-This proves account/test wiring, NOT real pose quality or physical OS guards.
-"""
-import os,subprocess,sys,json,textwrap
+import os, subprocess, sys, json, textwrap, time
 from pathlib import Path
-import pytest,yaml,cv2
+import pytest, yaml, cv2
 from proctor.school.database import SchoolDB
 
-@pytest.mark.skipif(os.getenv('PROCTOR_SCHOOL_SMOKE')!='1',reason='opt-in native model/WebEngine school workflow')
+
+@pytest.mark.skipif(
+    os.getenv("PROCTOR_SCHOOL_SMOKE") != "1",
+    reason="opt-in native model/WebEngine school workflow",
+)
 def test_native_authenticated_exam_round_trip(tmp_path):
-    image=cv2.imread(os.environ['PROCTOR_FACE_FIXTURE']);assert image is not None
-    video=tmp_path/'static.mp4';h,w=image.shape[:2]
-    cap=cv2.VideoWriter(str(video),cv2.VideoWriter_fourcc(*'mp4v'),30,(w,h))
-    for n in range(600):cap.write(image)
+    image = cv2.imread(os.environ["PROCTOR_FACE_FIXTURE"])
+    assert image is not None
+    video = tmp_path / "static.mp4"
+    h, w = image.shape[:2]
+    cap = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 30, (w, h))
+    for n in range(600):
+        cap.write(image)
     cap.release()
-    db=SchoolDB(tmp_path/'school.db');db.setup_owner('owner','Synthetic Administrator','Owner-password-123')
-    admin=db.login('owner','Owner-password-123');db.register_student('student','Synthetic Student','Student-password-123');student=db.login('student','Student-password-123')
-    test=db.create_test(admin,'Synthetic workflow test',60,[dict(text='Two plus two?',options=['Three','Four'],correct=1)])
-    ident,lease=db.new_attempt(student,test,True)
-    launch=tmp_path/'launch'/ident;launch.mkdir(parents=True)
-    config=yaml.safe_load(Path('proctor/config.yaml').read_text());config['profile']='dev';config['test']['test_url']=str(launch/'exam.html');config['store']['db']=str(tmp_path/'session.db');config['hash_chain']['salt_hex']='';config['guard']['examiner']=db.guard_credentials()
-    conf=launch/'config.yaml';conf.write_text(yaml.safe_dump(config))
-    script=textwrap.dedent('''
+    db = SchoolDB(tmp_path / "school.db")
+    db.setup_owner("owner", "Synthetic Administrator", "Owner-password-123")
+    admin = db.login("owner", "Owner-password-123")
+    db.register_student("student", "Synthetic Student", "Student-password-123")
+    student = db.login("student", "Student-password-123")
+    test = db.create_test(
+        admin,
+        "Synthetic workflow test",
+        60,
+        [dict(text="Two plus two?", options=["Three", "Four"], correct=1)],
+    )
+    ident, lease = db.new_attempt(student, test, True)
+    launch = tmp_path / "launch" / ident
+    launch.mkdir(parents=True)
+    config = yaml.safe_load(Path("proctor/config.yaml").read_text())
+    config["profile"] = "dev"
+    config["test"]["test_url"] = str(launch / "exam.html")
+    config["store"]["db"] = str(tmp_path / "session.db")
+    config["hash_chain"]["salt_hex"] = ""
+    config["guard"]["examiner"] = db.guard_credentials()
+    conf = launch / "config.yaml"
+    conf.write_text(yaml.safe_dump(config))
+    script = textwrap.dedent("""
         import sys,time
         import proctor.main as m
         from PyQt6.QtCore import QTimer
@@ -37,7 +56,7 @@ def test_native_authenticated_exam_round_trip(tmp_path):
             def remaining(self,now):return .5
             def advance(self,now):return now-self.started_at>.5
         m.MandatoryCalibration=ExplicitCalibrationStub
-        m.monitor_count=lambda:1 # offscreen test has one synthetic display
+        m.monitor_count=lambda:1
         http_called=[]
         def never_http(*a,**k):
             http_called.append(True);raise AssertionError('Student must not expose legacy HTTP examiner page')
@@ -59,14 +78,62 @@ def test_native_authenticated_exam_round_trip(tmp_path):
             QTimer.singleShot(18000,QApplication.instance().quit)
         m.PreflightScreen.__init__=ready
         code=m.main();assert not http_called;sys.exit(code)
-    ''')
-    env=dict(os.environ,QT_QPA_PLATFORM='offscreen',PROCTOR_SCHOOL_DB=str(db.path),PROCTOR_ATTEMPT_LEASE=lease)
-    result=subprocess.run([sys.executable,'-c',script,'--embedded-test','--config',str(conf),'--profile','dev','--no-guard','--video',str(video)],env=env,text=True,capture_output=True,timeout=35)
-    (tmp_path/'child.log').write_text(result.stdout+'\n'+result.stderr)
+    """)
+    env = dict(
+        os.environ,
+        QT_QPA_PLATFORM="offscreen",
+        PROCTOR_SCHOOL_DB=str(db.path),
+        PROCTOR_ATTEMPT_LEASE=lease,
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            "--embedded-test",
+            "--config",
+            str(conf),
+            "--profile",
+            "dev",
+            "--no-guard",
+            "--video",
+            str(video),
+        ],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    live_seen = False
+    deadline = time.monotonic() + 35
     try:
-        assert result.returncode==0,result.stderr[-2000:]
-        row=db.attempts(admin)[0]
-        assert row['status']=='finished' and row['score']==1 and row['total']==1,(row,result.stdout[-3000:],result.stderr[-1500:])
-        assert row['source']=='video replay' and Path(row['run_dir']).is_dir()
-        assert db.con.execute('SELECT answers FROM attempts WHERE id=?',(ident,)).fetchone()[0]!='{}'
-    finally:db.close()
+        while process.poll() is None and time.monotonic() < deadline:
+            live_seen = live_seen or db.live_snapshot(admin, ident)["live"]
+            time.sleep(0.05)
+        stdout, stderr = process.communicate(timeout=5)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    result = subprocess.CompletedProcess(
+        process.args, process.returncode, stdout, stderr
+    )
+    (tmp_path / "child.log").write_text(result.stdout + "\n" + result.stderr)
+    try:
+        assert result.returncode == 0, result.stderr[-2000:]
+        row = db.attempts(admin)[0]
+        assert (
+            row["status"] == "finished" and row["score"] == 1 and row["total"] == 1
+        ), (row, result.stdout[-3000:], result.stderr[-1500:])
+        assert (
+            live_seen
+        ), "Separate privileged connection did not receive a fresh client frame"
+        assert row["source"] == "video replay" and Path(row["run_dir"]).is_dir()
+        assert (
+            db.con.execute(
+                "SELECT answers FROM attempts WHERE id=?", (ident,)
+            ).fetchone()[0]
+            != "{}"
+        )
+    finally:
+        db.close()

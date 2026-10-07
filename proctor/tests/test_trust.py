@@ -1,6 +1,6 @@
-"""Мок-нарушения: потолок типа, повторы 0.3x, разбивка. Без камеры."""
 import sys, os
 from types import SimpleNamespace
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from proctor.core.trust_score import TrustCalculator
@@ -55,7 +55,13 @@ def test_empty():
 
 
 if __name__ == "__main__":
-    for fn in (test_single_loss, test_repeat_factor, test_type_cap, test_breakdown, test_empty):
+    for fn in (
+        test_single_loss,
+        test_repeat_factor,
+        test_type_cap,
+        test_breakdown,
+        test_empty,
+    ):
         fn()
         print(f"OK {fn.__name__}")
     print("Все тесты прошли (синтетика, без камеры).")

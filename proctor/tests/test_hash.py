@@ -1,8 +1,8 @@
-"""Цепочка хешей: запись, проверка, подмена строки. Без камеры."""
 import os
 import sqlite3
 import sys
 import tempfile
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from proctor.core.hash_chain import EventHashChain

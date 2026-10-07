@@ -1,9 +1,10 @@
-"""Process watchdog: snapshot at start, only NEW allowlisted processes. Mode close/log from config."""
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 
+
 class ProcWatch(QThread):
     found = pyqtSignal(str)
+
     def __init__(self, blacklist, interval=2.0, mode="log", parent=None):
         super().__init__(parent)
         self.black = [b.lower() for b in blacklist]

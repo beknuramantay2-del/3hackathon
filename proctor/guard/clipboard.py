@@ -1,17 +1,17 @@
-"""GUI-thread clipboard guard. Ignore self-clears, throttle external change bursts."""
 import time
-from PyQt6.QtCore import QObject,QTimer
+from PyQt6.QtCore import QObject, QTimer
+
 
 class ClipboardGuard(QObject):
-    def __init__(self,app,interval=5.,on_violation=None,parent=None):
+    def __init__(self, app, interval=5.0, on_violation=None, parent=None):
         super().__init__(parent)
-        self.app,self.on_violation = app,on_violation
+        self.app, self.on_violation = app, on_violation
         self.cb = app.clipboard()
         self._clearing = False
         self._active = False
         self._last_hit = -1e9
         self.timer = QTimer(self)
-        self.timer.setInterval(max(100,int(interval*1000)))
+        self.timer.setInterval(max(100, int(interval * 1000)))
         self.timer.timeout.connect(self._hit)
 
     def start(self):
@@ -32,7 +32,7 @@ class ClipboardGuard(QObject):
         finally:
             self._clearing = False
         now = time.monotonic()
-        if now-self._last_hit >= 1.:
+        if now - self._last_hit >= 1.0:
             self._last_hit = now
             if self.on_violation:
                 self.on_violation("COPY_ATTEMPT")
