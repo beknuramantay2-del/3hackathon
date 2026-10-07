@@ -89,6 +89,7 @@ def main():
                 raise ConfigError("exam требует Windows/admin, живую камеру и включенную защиту; для демо используйте dev")
     except (ConfigError,RuntimeError,SchoolError) as e:
         print(e,file=sys.stderr)
+        if school:school.close()
         return 2
     try:
         from PyQt6.QtWebEngineWidgets import QWebEngineView  # validate before creating QApplication
@@ -211,13 +212,15 @@ def main():
                    mode="log" if args.demo else cfg["guard"]["process_mode"],parent=app)
     pw.found.connect(lambda name:emit_violation("FORBIDDEN_PROCESS",{"process":name}))
     clipboard = ClipboardGuard(app,cfg["guard"]["clipboard_clear_sec"],emit_violation,parent=app)
-    try:
-        examiner = ExaminerServer(cfg["examiner"]["host"],cfg["examiner"]["port"],store.db,store.shots,
-                                  cfg["trust_weights"],lambda:state["fio"],lambda:state["status"])
-        print("Экзаменатор:",examiner.start())
-    except Exception as e:
-        examiner = None
-        print("Панель экзаменатора недоступна:",e)
+    examiner=None
+    if not school:
+        try:
+            examiner = ExaminerServer(cfg["examiner"]["host"],cfg["examiner"]["port"],store.db,store.shots,
+                                      cfg["trust_weights"],lambda:state["fio"],lambda:state["status"])
+            print("Экзаменатор:",examiner.start())
+        except Exception as e:
+            examiner = None
+            print("Панель экзаменатора недоступна:",e)
     camera_check = {"done":False,"name":"","blocked":False}
     unlocked = {"monitors":False}
 
@@ -512,7 +515,7 @@ def main():
             window["test"].dispose()
         if examiner:
             examiner.stop()
-        if school and not school.closed:school.close()
+        if school:school.close()
         store.close()
         lock.unlock()
     app.aboutToQuit.connect(cleanup)

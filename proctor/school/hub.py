@@ -2,7 +2,7 @@
 import argparse,json,os,subprocess,sys,time
 from pathlib import Path
 import yaml
-from PyQt6.QtCore import Qt,QTimer
+from PyQt6.QtCore import Qt,QTimer,QLockFile
 from PyQt6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QLineEdit,QPushButton,QTabWidget,
  QTableWidget,QTableWidgetItem,QHeaderView,QDialog,QFormLayout,QComboBox,QPlainTextEdit,QSpinBox,QCheckBox,QMessageBox,QListWidget)
 from PyQt6.QtGui import QPixmap
@@ -75,6 +75,8 @@ class Inspector(QDialog):
             self.info.setText(f"Эпизодов в окне: {len(self.rows)} · готовых фрагментов: {len(data['clips'])}. Данные обновляются раз в 2 с.")
         except (SchoolError,OSError,sqlite_error()) as exc:self.info.setText(str(exc))
     def play(self):
+        try:self.db.actor(self.token,('admin','examiner'))
+        except SchoolError as exc:self.info.setText(str(exc));return
         index=self.episodes.currentRow()
         if not 0<=index<len(self.rows) or not self.directory:return
         import sqlite3
@@ -114,7 +116,7 @@ class Hub(QWidget):
         try:
             login,name,password,_=d.values()
             (self.db.setup_owner if owner else self.db.register_student)(login,name,password)
-            self.login.setText(login);self.password.clear();self.login_screen()
+            self.login_screen();self.login.setText(login)
         except SchoolError as exc:self.fail(exc)
     def sign_in(self):
         try:
@@ -195,7 +197,10 @@ class Hub(QWidget):
             command=[sys.executable,'-m','proctor.main','--embedded-test','--config',str(config_path)]
             if self.preview:command+=['--no-guard']
             self.proc=subprocess.Popen(command,env=env);self.hide()
-        except (SchoolError,OSError) as exc:self.fail(exc)
+        except (SchoolError,OSError) as exc:
+            if self.attempt_id:
+                with self.db.tx():self.db.con.execute("UPDATE attempts SET status='interrupted',ended=? WHERE id=? AND status='preparing'",(time.time(),self.attempt_id))
+            self.fail(exc)
     def poll(self):
         try:
             if self.proc:
@@ -218,6 +223,8 @@ class Hub(QWidget):
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--preview',action='store_true',help='Unprotected local workflow check, not a real exam');args=ap.parse_args()
     os.chdir(Path(__file__).resolve().parents[2]);app=QApplication(sys.argv);app.setStyleSheet(Path('proctor/ui/style.qss').read_text())
+    Path('data').mkdir(exist_ok=True);lock=QLockFile(str(Path('data/school.lock').resolve()))
+    if not lock.tryLock(100):raise SystemExit('Школьный клиент уже открыт')
     db=SchoolDB();w=Hub(db,args.preview);w.show()
     try:return app.exec()
-    finally:db.close()
+    finally:db.close();lock.unlock()

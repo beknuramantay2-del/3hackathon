@@ -22,7 +22,7 @@ function submitQuiz(){if(!window.bridge){document.getElementById('error').textCo
 class SchoolExam:
     def __init__(self,db_path,lease):
         self.db=SchoolDB(db_path);self.lease=lease;self.spec=self.db.claim(lease)
-        self.closed=False;self.result=None
+        self.closed=False;self.disposed=False;self.result=None
 
     @classmethod
     def from_environment(cls):
@@ -37,8 +37,10 @@ class SchoolExam:
         self.result=self.db.finish(self.lease,answers);self.closed=True;return self.result
 
     def close(self):
+        if self.disposed:return
         if not self.closed:
             with self.db.tx():
                 self.db.con.execute("UPDATE attempts SET status='interrupted',ended=? WHERE lease_hash=? AND status IN ('preparing','calibrating','running')",(time.time(),self.db.digest(self.lease)))
             self.closed=True
-        self.db.archive_evidence(self.lease);self.db.close()
+        try:self.db.archive_evidence(self.lease)
+        finally:self.db.close();self.disposed=True
