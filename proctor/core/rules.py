@@ -35,6 +35,8 @@ class RuleEngine:
     def __init__(self,cfg,calib_base=None):
         self.cfg,self.calib = cfg,calib_base or {}
         self.face,self.yolo,self.hands = FaceResult(),YoloResult(),HandResult()
+        self.preview_base = {}
+        self.gaze_preview=DirectionState("gaze")
         self.phone_voted = False
         self.debug = {}
         self.head,self.gaze = DirectionState("head"),DirectionState("gaze")
@@ -52,11 +54,11 @@ class RuleEngine:
     def reset(self):
         for rule in self.rules.values():
             rule.reset()
-        self.head.reset(); self.gaze.reset()
+        self.head.reset(); self.gaze.reset();self.gaze_preview.reset()
 
     def on_face(self,f):
         if f.primary_changed:
-            self.calib={}
+            self.calib={};self.preview_base={}
             self.reset()
         self.face = f
 
@@ -90,7 +92,7 @@ class RuleEngine:
         f,y = self.face,self.yolo
         ff,yf,hf = self.fresh(f,now),self.fresh(y,now),self.fresh(self.hands,now,.5)
         present = ff and f.n_faces >= 1
-        base = dict(self.calib)
+        base = dict(self.calib or self.preview_base)
         if not base.get("head_calibrated") or self.cfg.get("head_threshold_override"):
             base["head_x_threshold"] = max(base.get("head_x_threshold",0),self.cfg["rules"]["gaze_side"]["yaw_thresh"])
             base["head_y_threshold"] = max(base.get("head_y_threshold",0),self.cfg["rules"]["gaze_down"]["pitch_thresh"])
@@ -107,6 +109,12 @@ class RuleEngine:
             gh = base.get("iris_h",.5)+sum(e[0] for e in offsets)/len(offsets)
             gv = base.get("iris_v",.5)+sum(e[1] for e in offsets)/len(offsets)
         gaze = self.gaze.update(gh,gv,base,now,present and f.gaze_valid and not f.primary_changed)
+        anchored_head=bool(self.calib) or base.get('head_center_measured',False)
+        anchored_gaze=bool(self.calib) or base.get('gaze_center_measured',False)
+        gaze_preview_valid=present and (f.gaze_valid or f.gaze_preview_valid) and not f.primary_changed
+        preview_gaze=self.gaze_preview.update(gh,gv,base,now,gaze_preview_valid and anchored_gaze)
+        display_head=head if anchored_head else 'UNKNOWN'
+        display_gaze=gaze if f.gaze_valid and anchored_gaze else preview_gaze
         phone = yf and self.phone_voted
         raised = phone and self._in_shoot_zone(present)
         lifted = phone and any(p.confirmed and p.observed and (p.velocity[1]+p.velocity[3])/2 < -max(60.,(p.y2-p.y1)*1.2) for p in y.phones)
@@ -123,7 +131,11 @@ class RuleEngine:
         for k,c in conds.items():
             if self.cfg["rules"][self.key_of[k]].get("enabled",True) and self.rules[k].update(c,now):
                 out.append(k)
-        self.debug = dict(head=head,gaze=gaze,dyaw=f.yaw-base.get("yaw",0),dpitch=f.pitch-base.get("pitch",0),
+        self.debug = dict(head=head,gaze=gaze,head_display=display_head,gaze_display=display_gaze,
+                          preview_ready=bool(anchored_head or anchored_gaze),
+                          head_display_calibrated=bool(self.calib) and f.pose_valid and present,
+                          gaze_display_calibrated=bool(self.calib) and f.gaze_valid and present,
+                          pose_method=f.pose_method,dyaw=f.yaw-base.get("yaw",0),dpitch=f.pitch-base.get("pitch",0),
                           iris_h=float(gh),iris_v=float(gv),
                           gaze_dx=float(gh-base.get("iris_h",.5)),gaze_dy=float(gv-base.get("iris_v",.5)),
                           thresholds={"yaw":base["head_x_threshold"],"pitch":base["head_y_threshold"],

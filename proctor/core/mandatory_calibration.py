@@ -17,6 +17,7 @@ class MandatoryCalibration:
         self.cal = Calibration(15., min_samples=min_samples, settle=.6)
         self.head_base = {}; self.base = {}; self.done = False; self.invalid=False
         self.started_at = None
+        self._neutral_preview = {}
 
     def start(self, now):
         self.started_at = now
@@ -40,6 +41,48 @@ class MandatoryCalibration:
         return self.cal.add(f.yaw, f.pitch, f.iris_h if self.stage == 'gaze' else .5,
                             f.iris_v if self.stage == 'gaze' else .5, now=f.captured_at,
                             left_eye=f.left_eye, right_eye=f.right_eye)
+
+    def preview(self):
+        """Measured neutral/partial targets for DISPLAY, never marks calibration complete.
+        Freeze neutral from the labelled CENTER step, not from arbitrary stable turns.
+        Keep a valid head pass when the subsequent iris pass fails.
+        """
+        if self.invalid:return {}
+        if self.stage=='head' and not self._neutral_preview:
+            try:center,mad=self.cal.trimmed(self.cal.samples['CENTER'],self.min_samples)
+            except CalibrationError:return {}
+            if max(mad[:2])>3:return {}
+            self._neutral_preview=dict(yaw=float(center[0]),pitch=float(center[1]),head_center_measured=True,
+                head_x_threshold=18.,head_y_threshold=12.,gaze_x_threshold=.06,gaze_y_threshold=.06,
+                head_targets={},gaze_targets={},eye_centers={},complete=False)
+        base=dict(self._neutral_preview)
+        if not base:return {}
+        if self.head_base:base.update(self.head_base)
+        if self.stage=='gaze':
+            # A copy: finish() on the live collector would stop accepting samples.
+            partial=Calibration(15.,min_samples=self.min_samples)
+            partial.samples={p:list(v) for p,v in self.cal.samples.items()}
+            partial.eye_samples={p:list(v) for p,v in self.cal.eye_samples.items()}
+            try:
+                measured=partial.finish(allow_partial=True)
+                for key in ('yaw','pitch','iris_h','iris_v','eye_centers','gaze_targets','gaze_x_threshold','gaze_y_threshold'):
+                    base[key]=measured[key]
+            except CalibrationError:pass
+        if not base.get('eye_centers'):
+            centers={}
+            for index,name in enumerate(('left','right')):
+                values=[e[index] for e in self.cal.eye_samples['CENTER'] if e[index] is not None]
+                if len(values)<self.min_samples:continue
+                values=np.asarray(values);center=np.median(values,axis=0);noise=np.median(abs(values-center),axis=0)
+                if np.isfinite(values).all() and noise[0]<=.04 and noise[1]<=.06:centers[name]=list(map(float,center))
+            base['eye_centers']=centers
+        if base.get('eye_centers'):
+            center=np.mean(list(base['eye_centers'].values()),axis=0)
+            base.update(iris_h=float(center[0]),iris_v=float(center[1]),gaze_center_measured=True)
+        else:base['gaze_center_measured']=False
+        base['complete']=False
+        self._neutral_preview=dict(base)
+        return base
 
     def _finish_head(self):
         measured={}

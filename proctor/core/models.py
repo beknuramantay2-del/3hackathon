@@ -15,6 +15,8 @@ class FaceResult:
     face_boxes: list = field(default_factory=list)
     left_eye: tuple | None = None
     right_eye: tuple | None = None
+    pose_method: str = ""
+    gaze_preview_valid: bool = False
     pose_valid: bool = True
     gaze_valid: bool = True
     primary_changed: bool = False
