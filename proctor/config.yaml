@@ -1,39 +1,28 @@
-# Профиль: dev (разработка и демо) или exam (боевой режим).
-# В exam нужен пароль экзаменатора. URL нужен только --embedded-test.
 profile: dev
 
 test:
-  # Только для --embedded-test: реальная страница экзамена, по умолчанию отключено.
-  # Пустой test_url в exam блокирует старт.
   test_url: ""
-  # Белый список доменов. Пустой список означает: разрешен только хост test_url.
   allowed_domains: []
 
 camera:
-  # Индекс камеры (0 встроенная, 1 внешняя). Флаг --video перекрывает.
   index: 0
   width: 640
   height: 480
-  # Целевой FPS захвата.
   fps: 30
-  # Отзеркаливать превью (на расчеты не влияет).
   mirror_preview: true
 
 yolo:
-  # Путь к весам. Для офлайн-демо: python proctor/tools/fetch_weights.py
   model: proctor/weights/yolov8n.pt
   imgsz: 640
-  # Порог уверенности для телефона (COCO cell phone, класс 67).
   conf_phone: 0.25
   conf_person: 0.5
   target_fps: 8
   detail_search: true
-  desk_search: true  # нижняя зона + общий поиск в том же ROI-бюджете
+  desk_search: true
   device: auto
   offline: true
   phone_class: 67
   person_class: 0
-  # Legacy-параметры совместимости. В live используются tracker + время + подтверждения.
   vote_window: 8
   vote_threshold: 4
 
@@ -48,11 +37,8 @@ face:
   min_tracking_confidence: 0.5
 
 calibration:
-  # 5 поз взгляда по 4 с, переходы и выбросы исключаются.
   duration_sec: 30.0
 
-# Проверка камеры на старте. Эвристика по имени устройства, не гарантия.
-# Неизвестное имя не блокирует.
 preflight:
   virtual_check_enabled: true
   virtual_keywords:
@@ -64,22 +50,15 @@ preflight:
     - screen
     - capture
 
-# Правила детекции. enabled выключает правило полностью.
-# hold: сколько секунд условие держится до срабатывания.
-# cooldown: пауза после срабатывания в секундах.
 rules:
   phone_detected:
     enabled: true
     hold: 0.5
     cooldown: 5.0
-  # Телефон в зоне съемки: центр рамки выше подбородка или
-  # пересечение с расширенной рамкой лица.
   phone_raised:
     enabled: true
     hold: 1.0
     cooldown: 5.0
-  # Удержание телефона в зоне съемки. Косвенный признак:
-  # камера монитора не видит объектив телефона.
   phone_aimed:
     enabled: true
     hold: 2.0
@@ -103,17 +82,14 @@ rules:
     enabled: true
     hold: 1.0
     cooldown: 5.0
-  # Темный однородный кадр: возможно, камера закрыта.
   camera_covered:
     enabled: true
     brightness_thresh: 25.0
     variance_thresh: 120.0
     hold: 1.5
     cooldown: 5.0
-  # Разрывы условия короче gap_tolerance не сбрасывают таймер удержания.
   gap_tolerance: 0.3
 
-# Веса индекса доверия (Trust Score, старт 100).
 trust_weights:
   PHONE_DETECTED: 15
   PHONE_RAISED: 20
@@ -132,18 +108,13 @@ trust_weights:
   FOCUS_LOST: 10
   SECOND_MONITOR: 15
   TAB_SWITCH: 5
-  # Переход на чужой домен или попытка нового окна.
   NAV_BLOCKED: 5
 
 guard:
   focus_check_ms: 300
   process_check_sec: 2.0
   clipboard_clear_sec: 5.0
-  # Режим при обнаружении запрещенного процесса: close или log.
-  # Рекомендуется: dev log, exam close.
   process_mode: log
-  # Только известные браузеры и средства удаленного доступа.
-  # Системные процессы не трогать.
   forbidden_processes:
     - chrome
     - msedge
@@ -172,33 +143,26 @@ guard:
     - f12
     - ctrl+u
     - ctrl+shift+i
-  # Комбинация выхода экзаменатора. Блокировщик ее пропускает.
   exit_combo: ctrl+shift+f12
   examiner:
-    # PBKDF2-HMAC-SHA256, в конфиге только соль и хеш, пароля нет.
-    # Задать: python proctor/tools/set_password.py
     salt_hex: ""
     hash_hex: ""
     iterations: 100000
 
 performance:
-  mode: auto  # auto / weak / balanced
+  mode: auto
   adaptive: true
   threads: 2
 
 store:
   db: data/session.db
   screenshots: data/shots
-  # Сохранять ли кадры нарушений.
   save_screenshots: true
 
 examiner:
-  # HTTP-панель экзаменатора, только локальный адрес.
   host: 127.0.0.1
   port: 8901
 
-# Целостность лога событий. Соль отдельная, не парольная.
-# Пустая salt_hex генерируется при первом старте.
 hash_chain:
   enabled: true
   salt_hex: ""
@@ -206,7 +170,6 @@ hash_chain:
 report:
   out: data/report.html
 
-# Default live CV policy; durations are review thresholds, not an automatic verdict.
 policy:
   yellow_sec: 3.0
   red_sec: 5.0

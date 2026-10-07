@@ -1,10 +1,18 @@
-"""Целостность лога: каждое событие хеширует предыдущее. Подмена задним числом разрывает цепочку."""
 import hashlib
 
 
 def digest(prev, etype, severity, t_start, duration, details, salt):
-    raw = "|".join([prev, etype, str(severity), repr(float(t_start)),
-                    repr(float(duration)), details, salt])
+    raw = "|".join(
+        [
+            prev,
+            etype,
+            str(severity),
+            repr(float(t_start)),
+            repr(float(duration)),
+            details,
+            salt,
+        ]
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -19,7 +27,7 @@ class EventHashChain:
         return h
 
     def verify(self, rows):
-        """rows: (type, severity, t_start, duration, details, event_hash) по порядку времени."""
+
         head = self.salt
         for etype, severity, t_start, duration, details, event_hash in rows:
             head = digest(head, etype, severity, t_start, duration, details, self.salt)

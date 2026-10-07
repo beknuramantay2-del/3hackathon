@@ -1,4 +1,3 @@
-# Python 3.10–3.11. Pre-install dependencies/weights before going offline.
 ultralytics>=8.2,<9
 mediapipe>=0.10.14,<=0.10.21
 opencv-python>=4.8,<4.12

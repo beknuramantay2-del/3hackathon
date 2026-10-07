@@ -1,8 +1,8 @@
-"""Bounded, latest-only transport. No per-frame Qt event queue."""
 import threading
 import time
 from dataclasses import dataclass, field
 from collections import deque
+
 
 @dataclass(frozen=True)
 class FramePacket:
@@ -10,6 +10,7 @@ class FramePacket:
     captured_at: float
     frame: object
     source_time: float | None = None
+
 
 class LatestSlot:
     def __init__(self):
@@ -24,14 +25,19 @@ class LatestSlot:
 
     def take_after(self, version):
         with self._lock:
-            return (self._version, self._item) if self._version != version else (version, None)
+            return (
+                (self._version, self._item)
+                if self._version != version
+                else (version, None)
+            )
 
     def peek(self):
         with self._lock:
             return self._item
 
+
 class Timings:
-    """Small rolling windows, not an unbounded history."""
+
     def __init__(self, size=120):
         self.size = size
         self._lock = threading.Lock()
@@ -39,16 +45,23 @@ class Timings:
 
     def add(self, name, seconds):
         with self._lock:
-            self._values.setdefault(name, deque(maxlen=self.size)).append(seconds * 1000)
+            self._values.setdefault(name, deque(maxlen=self.size)).append(
+                seconds * 1000
+            )
 
     def snapshot(self):
         with self._lock:
             out = {}
             for key, values in self._values.items():
                 a = sorted(values)
-                out[key] = dict(n=len(a), mean_ms=sum(a) / len(a),
-                                p50_ms=a[len(a)//2], p95_ms=a[min(len(a)-1, int(len(a)*.95))])
+                out[key] = dict(
+                    n=len(a),
+                    mean_ms=sum(a) / len(a),
+                    p50_ms=a[len(a) // 2],
+                    p95_ms=a[min(len(a) - 1, int(len(a) * 0.95))],
+                )
             return out
+
 
 @dataclass
 class AdaptiveBudget:
@@ -64,23 +77,32 @@ class AdaptiveBudget:
         self.ceiling = self.target_fps
 
     def observe(self, seconds):
-        self.ewma = seconds if not self.ewma else .9 * self.ewma + .1 * seconds
+        self.ewma = seconds if not self.ewma else 0.9 * self.ewma + 0.1 * seconds
         self.observations += 1
         if not self.enabled or self.observations % 30:
             return
-        if self.ewma > .85 / self.target_fps:
-            self.target_fps = max(3.0, min(self.target_fps, .7 / max(self.ewma, .001)))
+        if self.ewma > 0.85 / self.target_fps:
+            self.target_fps = max(
+                3.0, min(self.target_fps, 0.7 / max(self.ewma, 0.001))
+            )
             if self.imgsz > self.min_imgsz:
                 self.imgsz = max(self.min_imgsz, self.imgsz - 32)
-        elif self.ewma < .5 / self.target_fps:
+        elif self.ewma < 0.5 / self.target_fps:
             self.target_fps = min(self.ceiling, self.target_fps + 1)
 
 
 def hardware_profile(mode="auto"):
     import os
+
     cores = os.cpu_count() or 2
     weak = mode == "weak" or (mode == "auto" and cores <= 4)
-    # Start conservatively; measured worker latency, not core count alone, controls rate.
-    return dict(width=640, height=480, imgsz=416 if weak else 640,
-                yolo_fps=6 if weak else 10, face_fps=12 if weak else 20,
-                hands_fps=4 if weak else 6, threads=1 if weak else max(1,min(2,cores//2)))
+
+    return dict(
+        width=640,
+        height=480,
+        imgsz=416 if weak else 640,
+        yolo_fps=6 if weak else 10,
+        face_fps=12 if weak else 20,
+        hands_fps=4 if weak else 6,
+        threads=1 if weak else max(1, min(2, cores // 2)),
+    )

@@ -1,4 +1,3 @@
-"""Pre-flight: эвристика виртуальной камеры по имени устройства. Не гарантия, только совпадение имени."""
 import glob
 import os
 import platform
@@ -6,7 +5,7 @@ import subprocess
 
 
 def get_camera_name(index=0):
-    """Имя видеоустройства. Пустая строка, если определить нельзя."""
+
     system = platform.system()
     if system == "Linux":
         path = f"/sys/class/video4linux/video{index}/name"
@@ -25,9 +24,16 @@ def get_camera_name(index=0):
     if system == "Windows":
         try:
             out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-PnpDevice -Class Camera -Status OK).FriendlyName -join '; '"],
-                capture_output=True, text=True, timeout=15)
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "(Get-PnpDevice -Class Camera -Status OK).FriendlyName -join '; '",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
             return out.stdout.strip() if out.returncode == 0 else ""
         except (OSError, subprocess.SubprocessError):
             return ""
@@ -40,7 +46,7 @@ def is_virtual(name, keywords):
 
 
 def check_camera(index, keywords, enabled=True):
-    """Возвращает (имя, заблокирована). Неизвестное имя не блокирует."""
+
     if not enabled:
         return "", False
     name = get_camera_name(index)

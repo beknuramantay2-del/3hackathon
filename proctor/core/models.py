@@ -1,5 +1,5 @@
-"""Worker snapshots; monotonic timestamps and sequence IDs travel with detections."""
 from dataclasses import dataclass, field
+
 
 @dataclass
 class FaceResult:
@@ -30,19 +30,24 @@ class FaceResult:
     timings: dict = field(default_factory=dict)
     error: str = ""
 
+
 @dataclass
 class Box:
     conf: float
-    x1: int; y1: int; x2: int; y2: int
+    x1: int
+    y1: int
+    x2: int
+    y2: int
     track_id: int = -1
     confirmed: bool = False
     observed: bool = True
-    velocity: tuple = (0.,0.,0.,0.)
+    velocity: tuple = (0.0, 0.0, 0.0, 0.0)
     strong_at: float | None = None
     supported: bool = False
     support_kind: str = ""
     source: str = "global"
     detail_agreement: bool = False
+
 
 @dataclass
 class YoloResult:
@@ -61,6 +66,7 @@ class YoloResult:
     timings: dict = field(default_factory=dict)
     error: str = ""
 
+
 @dataclass
 class HandResult:
     boxes: list = field(default_factory=list)
@@ -68,6 +74,7 @@ class HandResult:
     captured_at: float = 0.0
     error: str = ""
     timings: dict = field(default_factory=dict)
+
 
 @dataclass
 class Violation:

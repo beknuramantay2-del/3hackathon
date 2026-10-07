@@ -1,9 +1,19 @@
-"""Строгие экраны: старт, калибровка, окно теста с превью 240x180 и одной строкой статуса."""
 import cv2
 import time
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QPushButton, QLineEdit, QListWidget, QListWidgetItem, QProgressBar, QApplication, QGridLayout)
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QProgressBar,
+    QApplication,
+    QGridLayout,
+)
 from PyQt6.QtGui import QImage, QPixmap, QColor
 from proctor.core.strings import load_strings
 
@@ -64,13 +74,17 @@ class StartWindow(QWidget):
 
     def refresh(self):
         checks = self.checks_fn() if self.checks_fn else [("Готово", True)]
-        self.cam_status.setText("\n".join(("✓ " if good else "… ")+name for name,good in checks))
+        self.cam_status.setText(
+            "\n".join(("✓ " if good else "… ") + name for name, good in checks)
+        )
         self.cam_status.setWordWrap(True)
-        mon_blocked = any("Мониторов" in name and not good for name,good in checks)
+        mon_blocked = any("Мониторов" in name and not good for name, good in checks)
         self.note.setText(T["second_monitor_msg"] if mon_blocked else "")
         self.note.setVisible(mon_blocked)
         self.unlock_btn.setVisible(mon_blocked)
-        self.start_btn.setEnabled(all(good for _,good in checks) and bool(self.fio_text))
+        self.start_btn.setEnabled(
+            all(good for _, good in checks) and bool(self.fio_text)
+        )
 
     def closeEvent(self, e):
         try:
@@ -80,22 +94,26 @@ class StartWindow(QWidget):
         super().closeEvent(e)
 
 
-# обратная совместимость со старым main.py
 PreflightScreen = StartWindow
 
 
 class CalibrationView(QWidget):
     done = pyqtSignal()
     canceled = pyqtSignal()
-    prompts = ("Смотрите прямо. Голова неподвижна", "Глазами влево. Голова прямо",
-               "Глазами вправо. Голова прямо", "Глазами вверх. Голова прямо", "Глазами вниз. Голова прямо")
+    prompts = (
+        "Смотрите прямо. Голова неподвижна",
+        "Глазами влево. Голова прямо",
+        "Глазами вправо. Голова прямо",
+        "Глазами вверх. Голова прямо",
+        "Глазами вниз. Голова прямо",
+    )
 
     def __init__(self, seconds=20.0, external=False):
         super().__init__()
         self.setObjectName("root")
         self.seconds = seconds
         self.external = external
-        self.started_at = 0.
+        self.started_at = 0.0
         self.last_phase = -1
         lay = QVBoxLayout(self)
         lay.addStretch(1)
@@ -110,10 +128,13 @@ class CalibrationView(QWidget):
         self.counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.counter)
         self.preview = QLabel()
-        self.preview.setFixedSize(320,240)
+        self.preview.setFixedSize(320, 240)
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(self.preview,0,Qt.AlignmentFlag.AlignCenter)
-        self.directions=QLabel('ГОЛОВА: — · ГЛАЗА: —');self.directions.setWordWrap(True);self.directions.setAlignment(Qt.AlignmentFlag.AlignCenter);lay.addWidget(self.directions)
+        lay.addWidget(self.preview, 0, Qt.AlignmentFlag.AlignCenter)
+        self.directions = QLabel("ГОЛОВА: — · ГЛАЗА: —")
+        self.directions.setWordWrap(True)
+        self.directions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.directions)
         self.message = QLabel("")
         self.message.setWordWrap(True)
         lay.addWidget(self.message)
@@ -121,7 +142,7 @@ class CalibrationView(QWidget):
         self.retry.setVisible(False)
         lay.addWidget(self.retry)
         cancel = QPushButton("Отмена")
-        cancel.clicked.connect(lambda:(self.t.stop(),self.canceled.emit()))
+        cancel.clicked.connect(lambda: (self.t.stop(), self.canceled.emit()))
         lay.addWidget(cancel)
         lay.addStretch(1)
         self.t = QTimer(self)
@@ -141,14 +162,15 @@ class CalibrationView(QWidget):
         self.retry.setVisible(True)
 
     def step(self):
-        if self.external:return  # worker-validated mandatory workflow owns completion
-        elapsed = time.monotonic()-self.started_at
-        phase = min(4,int(elapsed/(self.seconds/5)))
+        if self.external:
+            return
+        elapsed = time.monotonic() - self.started_at
+        phase = min(4, int(elapsed / (self.seconds / 5)))
         if phase != self.last_phase:
             self.last_phase = phase
             self.prompt.setText(self.prompts[phase])
             QApplication.beep()
-        left = max(0,self.seconds-elapsed)
+        left = max(0, self.seconds - elapsed)
         self.counter.setText(f"Поза {phase+1}/5 · осталось {left:.1f} с")
         if elapsed >= self.seconds:
             self.t.stop()
@@ -161,25 +183,25 @@ class StatusTiles(QWidget):
         super().__init__()
         self.labels = []
         grid = QGridLayout(self)
-        grid.setContentsMargins(0,0,0,0)
+        grid.setContentsMargins(0, 0, 0, 0)
         for i in range(4):
             label = QLabel()
             label.setObjectName("tile")
             label.setWordWrap(True)
             self.labels.append(label)
-            grid.addWidget(label,i//2,i%2)
+            grid.addWidget(label, i // 2, i % 2)
         self._text = None
 
-    def setText(self,text):
+    def setText(self, text):
         if text == self._text:
             return
         self._text = text
-        for label,line in zip(self.labels,text.splitlines()):
-            label.setText(line.replace(": ","\n",1))
+        for label, line in zip(self.labels, text.splitlines()):
+            label.setText(line.replace(": ", "\n", 1))
 
 
 class SidePanel(QWidget):
-    """Bounded event feed, independent states, hold countdown, optional diagnostics."""
+
     def __init__(self):
         super().__init__()
         self.setObjectName("panel")
@@ -190,16 +212,18 @@ class SidePanel(QWidget):
         lay.addWidget(self.timer)
         self.cam = QLabel(T["preview_empty"])
         self.cam.setObjectName("camera")
-        self.cam.setFixedSize(320,240)
+        self.cam.setFixedSize(320, 240)
         self.cam.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.cam)
         self.states = StatusTiles()
-        self.states.setText("HEAD: UNKNOWN\nGAZE: UNKNOWN\nFACE: UNKNOWN\nPHONE: UNKNOWN")
+        self.states.setText(
+            "HEAD: UNKNOWN\nGAZE: UNKNOWN\nFACE: UNKNOWN\nPHONE: UNKNOWN"
+        )
         lay.addWidget(self.states)
         self.hold_label = QLabel("Удержание: 0.0 с")
         lay.addWidget(self.hold_label)
         self.hold = QProgressBar()
-        self.hold.setRange(0,100)
+        self.hold.setRange(0, 100)
         lay.addWidget(self.hold)
         self.status = QLabel(T["watch_active"])
         self.status.setWordWrap(True)
@@ -215,31 +239,37 @@ class SidePanel(QWidget):
 
     @staticmethod
     def pixmap(frame, width=320, height=240):
-        rgb = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-        h,w,ch = rgb.shape
-        q = QImage(rgb.data,w,h,ch*w,QImage.Format.Format_RGB888).copy()
-        return QPixmap.fromImage(q).scaled(width,height,Qt.AspectRatioMode.KeepAspectRatio)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        q = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+        return QPixmap.fromImage(q).scaled(
+            width, height, Qt.AspectRatioMode.KeepAspectRatio
+        )
 
-    def show_frame(self,frame):
+    def show_frame(self, frame):
         self.cam.setPixmap(self.pixmap(frame))
 
-    def set_status(self,text):
+    def set_status(self, text):
         self.status.setText(text)
 
-    def log(self,text,level=None,episode_id=''):
-        item=QListWidgetItem(text);item.setData(Qt.ItemDataRole.UserRole,episode_id)
-        if level is not None:item.setForeground(QColor(('#91cdaa','#f4c36f','#ff8c8c')[min(2,max(0,level))]))
-        self.feed.insertItem(0,item)
+    def log(self, text, level=None, episode_id=""):
+        item = QListWidgetItem(text)
+        item.setData(Qt.ItemDataRole.UserRole, episode_id)
+        if level is not None:
+            item.setForeground(
+                QColor(("#91cdaa", "#f4c36f", "#ff8c8c")[min(2, max(0, level))])
+            )
+        self.feed.insertItem(0, item)
         while self.feed.count() > 100:
-            self.feed.takeItem(self.feed.count()-1)
+            self.feed.takeItem(self.feed.count() - 1)
 
-    def set_hold(self,name,frac):
+    def set_hold(self, name, frac):
         self.hold_label.setText(name)
-        self.hold.setValue(min(100,max(0,int(frac*100))))
+        self.hold.setValue(min(100, max(0, int(frac * 100))))
 
-    def mark_fired(self,vtype):
+    def mark_fired(self, vtype):
         self.log(vtype)
 
-    def set_debug(self,text):
+    def set_debug(self, text):
         self.debug.setVisible(self.debug_on)
         self.debug.setText(text)

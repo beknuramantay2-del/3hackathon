@@ -1,9 +1,15 @@
-"""keyboard suppress hooks + emergency exit. No-op if not admin / --no-guard."""
 from .security import FULL_GUARD, OS
 
 
 class HotkeyGuard:
-    def __init__(self, hotkeys, emergency="ctrl+shift+f12", on_block=None, on_exit=None, enabled=True):
+    def __init__(
+        self,
+        hotkeys,
+        emergency="ctrl+shift+f12",
+        on_block=None,
+        on_exit=None,
+        enabled=True,
+    ):
         self.hotkeys = hotkeys
         self.emergency = emergency
         self.on_block = on_block
@@ -15,7 +21,7 @@ class HotkeyGuard:
         self.monitor_only = not FULL_GUARD
 
     def block_keys(self):
-        """Совместимость со скриптом демо: блокировать или перейти в мониторинг."""
+
         if self.monitor_only:
             print("Мониторинг (не блокирует): клавиши только логируются")
             return False
@@ -32,11 +38,15 @@ class HotkeyGuard:
             return False
         try:
             import keyboard
+
             self.kb = keyboard
             self.errors = []
             skip = (self.emergency or "").strip().lower()
             for hk in self.hotkeys:
-                if hk.strip().lower() == skip or hk.strip().lower() == skip.split("+")[-1]:
+                if (
+                    hk.strip().lower() == skip
+                    or hk.strip().lower() == skip.split("+")[-1]
+                ):
                     continue
                 try:
                     keyboard.add_hotkey(hk, lambda h=hk: self._cb(h), suppress=True)
