@@ -67,12 +67,15 @@ class Inspector(QDialog):
     def refresh(self):
         try:
             data=self.db.inspection(self.token,self.ident);self.rows=data['episodes'];self.directory=data.get('directory')
+            current={(e['ident'],e['level']) for e in self.rows if e['level']>0}
+            if current-getattr(self,'seen',set()):QApplication.beep()
+            self.seen=current
             selected=self.episodes.currentRow();fill(self.episodes,[[e['kind'],f"{e['duration']:.1f} с",('Зелёный · запись','Жёлтый','Красный')[min(2,e['level'])],'Да' if e['closed'] else 'Нет'] for e in self.rows])
             if 0<=selected<len(self.rows):self.episodes.selectRow(selected)
             if data['events'] and self.directory:
                 p=Path(data['events'][0]['screenshot']).resolve();root=(Path(self.directory)/'shots').resolve()
                 if p.is_relative_to(root) and p.is_file():self.image.setPixmap(QPixmap(str(p)).scaled(640,300,Qt.AspectRatioMode.KeepAspectRatio))
-            self.info.setText(f"Эпизодов в окне: {len(self.rows)} · готовых фрагментов: {len(data['clips'])}. Данные обновляются раз в 2 с.")
+            self.info.setText(f"Эпизодов в окне: {len(self.rows)} · красных: {sum(e['level']==2 for e in self.rows)} · жёлтых: {sum(e['level']==1 for e in self.rows)} · готовых фрагментов: {len(data['clips'])}. Данные обновляются раз в 2 с.")
         except (SchoolError,OSError,sqlite_error()) as exc:self.info.setText(str(exc))
     def play(self):
         try:self.db.actor(self.token,('admin','examiner'))
@@ -103,13 +106,15 @@ class Hub(QWidget):
     def fail(self,exc):QMessageBox.warning(self,'Не выполнено',str(exc))
     def login_screen(self):
         self.clear();self.actor=None;self.root.addStretch(1)
-        heading=QLabel('Локальный экзамен');heading.setObjectName('title');self.root.addWidget(heading)
-        info=QLabel('Ученики · тесты · наблюдение\nВсе записи остаются на этом компьютере.'+('\nPREVIEW: защита компьютера выключена; не для реального экзамена.' if self.preview else ''));info.setWordWrap(True);self.root.addWidget(info)
-        self.login=QLineEdit();self.login.setPlaceholderText('Логин');self.login.setMaxLength(64)
-        self.password=QLineEdit();self.password.setPlaceholderText('Пароль');self.password.setEchoMode(QLineEdit.EchoMode.Password);self.password.setMaxLength(256)
-        self.root.addWidget(self.login);self.root.addWidget(self.password)
-        enter=QPushButton('Войти');enter.clicked.connect(self.sign_in);self.password.returnPressed.connect(self.sign_in);self.root.addWidget(enter)
-        register=QPushButton('Создать первого администратора' if self.db.needs_owner() else 'Регистрация ученика');register.setObjectName('secondary');register.clicked.connect(self.register);self.root.addWidget(register);self.root.addStretch(1)
+        card=QWidget();card.setObjectName('panel');card.setMaximumWidth(560);box=QVBoxLayout(card);box.setContentsMargins(24,24,24,24);box.setSpacing(16)
+        heading=QLabel('Локальный экзамен');heading.setObjectName('title');box.addWidget(heading)
+        info=QLabel('Ученики · тесты · наблюдение\nВсе записи остаются на этом компьютере.'+('\nPREVIEW: защита компьютера выключена; не для реального экзамена.' if self.preview else ''));info.setWordWrap(True);box.addWidget(info)
+        self.login=QLineEdit();self.login.setPlaceholderText('Логин');self.login.setMaxLength(64);self.login.setMinimumHeight(44)
+        self.password=QLineEdit();self.password.setPlaceholderText('Пароль');self.password.setEchoMode(QLineEdit.EchoMode.Password);self.password.setMaxLength(256);self.password.setMinimumHeight(44)
+        box.addWidget(QLabel('Логин'));box.addWidget(self.login);box.addWidget(QLabel('Пароль'));box.addWidget(self.password)
+        enter=QPushButton('Войти');enter.clicked.connect(self.sign_in);self.password.returnPressed.connect(self.sign_in);box.addWidget(enter)
+        register=QPushButton('Создать первого администратора' if self.db.needs_owner() else 'Регистрация ученика');register.setObjectName('secondary');register.clicked.connect(self.register);box.addWidget(register)
+        self.root.addWidget(card,0,Qt.AlignmentFlag.AlignHCenter);self.root.addStretch(1)
     def register(self):
         owner=self.db.needs_owner();d=AccountDialog(self)
         if d.exec()!=QDialog.DialogCode.Accepted:return
@@ -126,7 +131,7 @@ class Hub(QWidget):
         if self.token:self.db.logout(self.token)
         self.token='';self.login_screen()
     def dashboard(self):
-        self.clear();title=QLabel(self.actor['name']+' · '+ROLES[self.actor['role']]);title.setObjectName('title');self.root.addWidget(title)
+        self.clear();title=QLabel(self.actor['name']+' · '+ROLES[self.actor['role']]);title.setTextFormat(Qt.TextFormat.PlainText);title.setObjectName('title');self.root.addWidget(title)
         out=QPushButton('Выйти из аккаунта');out.setObjectName('secondary');out.clicked.connect(self.sign_out);self.root.addWidget(out)
         self.tabs=QTabWidget();self.root.addWidget(self.tabs,1)
         tests_page=QWidget();tl=QVBoxLayout(tests_page);self.tests_table=table(['Тест','Минут','Вопросов']);tl.addWidget(self.tests_table)
@@ -134,7 +139,7 @@ class Hub(QWidget):
         if self.actor['role']=='student':
             self.consent=QCheckBox('Согласен на локальную запись камеры и эпизодов во время экзамена');tl.addWidget(self.consent)
         self.tabs.addTab(tests_page,'Тесты')
-        attempt_page=QWidget();al=QVBoxLayout(attempt_page);self.attempts_table=table(['Ученик','Тест','Статус','Правильных / всего','Источник']);al.addWidget(self.attempts_table)
+        attempt_page=QWidget();al=QVBoxLayout(attempt_page);self.attempts_table=table(['Ученик','Тест','Статус','Правильных / всего','Источник']+(['Жёлтых','Красных'] if self.actor['role']!='student' else []));al.addWidget(self.attempts_table)
         if self.actor['role']!='student':
             inspect=QPushButton('Открыть события и футаж');inspect.clicked.connect(self.inspect);al.addWidget(inspect)
             interrupted=QPushButton('Закрыть зависшую попытку');interrupted.setObjectName('secondary');interrupted.clicked.connect(self.interrupt);al.addWidget(interrupted)
@@ -150,7 +155,15 @@ class Hub(QWidget):
     def refresh(self):
         if not self.actor:return
         self.test_rows=self.db.tests(self.token);fill(self.tests_table,[[r['title'],r['seconds']//60,r['count']] for r in self.test_rows])
-        self.attempt_rows=self.db.attempts(self.token);fill(self.attempts_table,[[r['name'],r['title'],STATUS.get(r['status'],r['status']),f"{r['score']} / {r['total']}" if r['score'] is not None else '—',r['source'] or 'Не измерено'] for r in self.attempt_rows])
+        self.attempt_rows=self.db.attempts(self.token)
+        if self.actor['role']!='student':
+            for r in self.attempt_rows:
+                if r['status'] in ('calibrating','running') and r['run_dir']:
+                    try:
+                        live=self.db.inspection(self.token,r['id'])['episodes']
+                        r['yellow']=sum(e['level']==1 for e in live);r['red']=sum(e['level']==2 for e in live)
+                    except (SchoolError,sqlite_error()):pass
+        fill(self.attempts_table,[[r['name'],r['title'],STATUS.get(r['status'],r['status']),f"{r['score']} / {r['total']}" if r['score'] is not None else '—',r['source'] or 'Не измерено']+([r['yellow'],r['red']] if self.actor['role']!='student' else []) for r in self.attempt_rows])
         if self.actor['role']!='student':
             self.user_rows=self.db.users(self.token);fill(self.users_table,[[r['name'],r['login'],ROLES[r['role']],'Включён' if r['active'] else 'Выключен'] for r in self.user_rows])
         self.status.setText('PREVIEW · без OS-защиты' if self.preview else 'Локально · один экзамен одновременно. CV требует реальной приёмки.')

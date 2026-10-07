@@ -284,6 +284,22 @@ def main():
             elif window['test']:window['test'].panel.set_status('Футаж ещё записывается / недоступен: '+recorder.error)
         finally:fw.enabled=was_enabled
 
+    def examiner_view():
+        if not school:return
+        was_enabled=fw.enabled;fw.enabled=False;token=None
+        try:
+            password,ok=QInputDialog.getText(stack,'Экзаменатор','Пароль активного экзаменатора/администратора:',QLineEdit.EchoMode.Password)
+            if not ok:return
+            token=school.db.privileged_session(password)
+            if not token:return
+            from proctor.school.hub import Inspector
+            view=Inspector(school.db,token,school.spec['id'],stack)
+            QTimer.singleShot(120000,view.reject)
+            view.exec()
+        finally:
+            if token:school.db.logout(token)
+            fw.enabled=was_enabled
+
     def calibration_done():
         state["calibrating"] = False
         try:
@@ -307,6 +323,7 @@ def main():
         if school:
             w.panel.states.hide();w.panel.feed.hide();w.panel.hold.hide();w.panel.hold_label.hide()
             w.panel.set_status('Камера активна. Ответы и записи сохраняются локально.')
+            staff_button=QPushButton('Экзаменатор',w.panel);staff_button.setObjectName('secondary');staff_button.clicked.connect(examiner_view);w.panel.layout().addWidget(staff_button)
         stack.addWidget(w); stack.setCurrentWidget(w)
         state.update(active=True,started=time.monotonic(),status="Тест активен")
         stack.locked = cfg["profile"] == "exam"
@@ -337,9 +354,10 @@ def main():
     process.cpu_percent()
     last_monitor = {"at":0.}
     deadline_requested=False
+    school_status_at=0.
 
     def poll():
-        nonlocal deadline_requested
+        nonlocal deadline_requested,school_status_at
         now = time.monotonic()
         if state["done"]:
             return
@@ -373,6 +391,9 @@ def main():
             except CalibrationError as exc:
                 state['calibrating']=False;engine.calib={};cal_view.failed(str(exc))
         if state["active"]:
+            if school and now-school_status_at>2:
+                school_status_at=now
+                if school.db.lease_status(school.lease)!='running':finish();return
             s = time.perf_counter()
             # Disable evidence from a dead/stalled worker; never keep a phone or gaze forever.
             if face.status != "ready":
@@ -476,6 +497,10 @@ def main():
         recorder.submit(policy.close());recorder.stop()
         writer.flush()
         if school:
+            import json
+            (session_dir/'calibration.json').write_text(json.dumps(engine.calib,ensure_ascii=False,indent=2))
+            (session_dir/'timings.json').write_text(json.dumps(metrics.snapshot(),indent=2))
+            (session_dir/'runtime.json').write_text(json.dumps(dict(attempt_id=school.spec['id'],source='video replay' if args.video else 'camera',profile=cfg['profile'],camera_frames=cam.seq,yolo_frames=yolo.processed_count,face_frames=face.processed_count,clips=recorder.clips,evidence_errors=recorder.failures,calibration_complete=calibration_complete(engine.calib)),ensure_ascii=False,indent=2))
             school.close();app.quit();return
         report,score,_ = generate(store,cfg,cfg["report"]["out"],cam.camera_fps,time.time()-store.t0,state["fio"],trust.get_score(texts.get("trust_labels") or {}))
         import json

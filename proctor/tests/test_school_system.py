@@ -99,6 +99,7 @@ def test_real_evidence_link_and_central_archive(school,tmp_path):
     data=db.inspection(a,ident);assert data['episodes'][0]['level']==2 and data['events'][0]['type']=='HEAD_DOWN'
     db.archive_evidence(lease)
     assert db.con.execute('SELECT COUNT(*) FROM evidence WHERE attempt_id=?',(ident,)).fetchone()[0]==2
+    assert db.attempts(a)[0]['red']==1 and db.attempts(a)[0]['yellow']==0
 
 def test_school_context_idempotent_cleanup_and_abort(school):
     db,a,s,t,u=school;ident,lease=db.new_attempt(s,t,True)
@@ -121,3 +122,16 @@ def test_native_role_hub_layout_and_hidden_student_admin_controls(school):
     w.sign_out();w.token=a;w.actor=db.actor(a);w.dashboard();app.processEvents()
     assert w.tabs.count()==4 and w.users_table.rowCount()==2
     assert w.width()>=1000;w.timer.stop();w.close();app.processEvents()
+
+def test_student_password_cannot_open_examiner_view_and_rate_limited(school):
+    db,a,s,t,u=school
+    assert not db.privileged_password('Student-password-123')
+    token=db.privileged_session('Owner-password-123');assert db.actor(token)['role']=='admin';db.logout(token)
+    for _ in range(5):assert db.privileged_session('invalid') is None
+    assert db.privileged_session('Owner-password-123') is None
+
+def test_student_cannot_interrupt_running_exam(school):
+    db,a,s,t,u=school;ident,lease=db.new_attempt(s,t,True);db.claim(lease);db.start(lease)
+    with pytest.raises(SchoolError):db.interrupt(s,ident)
+    db.interrupt(a,ident);assert db.lease_status(lease)=='interrupted'
+    with pytest.raises(SchoolError):db.finish(lease,{})

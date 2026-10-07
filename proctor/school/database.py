@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT,expires R
 CREATE TABLE IF NOT EXISTS failures(login TEXT PRIMARY KEY,amount INT,until_time REAL);
 CREATE TABLE IF NOT EXISTS tests(id TEXT PRIMARY KEY,title TEXT,seconds INT,questions TEXT,published INT,author TEXT);
 CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY,user_id TEXT,test_id TEXT,status TEXT,created REAL,started REAL,ended REAL,questions TEXT,answers TEXT,score INT,total INT,lease_hash TEXT UNIQUE,lease_expiry REAL,claimed INT DEFAULT 0,run_dir TEXT,source TEXT,consent INT);
-CREATE TABLE IF NOT EXISTS evidence(attempt_id TEXT,kind TEXT,source_id TEXT,payload TEXT,PRIMARY KEY(attempt_id,kind,source_id));
+CREATE TABLE IF NOT EXISTS evidence(attempt_id TEXT,kind TEXT,source_id TEXT,payload TEXT,level INTEGER,PRIMARY KEY(attempt_id,kind,source_id));
 CREATE INDEX IF NOT EXISTS ix_attempt_student ON attempts(user_id,created);
 '''
 
@@ -24,6 +24,8 @@ class SchoolDB:
         self.path=Path(path).resolve();self.path.parent.mkdir(parents=True,exist_ok=True)
         self.lock=threading.RLock();self.con=sqlite3.connect(self.path,check_same_thread=False,timeout=3,isolation_level=None)
         self.con.row_factory=sqlite3.Row;self.con.execute('PRAGMA journal_mode=WAL');self.con.execute('PRAGMA busy_timeout=3000');self.con.executescript(SCHEMA)
+        if 'level' not in [r[1] for r in self.con.execute('PRAGMA table_info(evidence)')]:self.con.execute('ALTER TABLE evidence ADD COLUMN level INTEGER')
+        self.con.execute('CREATE INDEX IF NOT EXISTS ix_evidence_level ON evidence(attempt_id,kind,level)')
         try:os.chmod(self.path,0o600)
         except OSError:pass
 
@@ -74,6 +76,7 @@ class SchoolDB:
 
     def login(self,login,password):
         login=login.strip().casefold();now=time.time()
+        if len(login)>64 or len(password)>256:raise SchoolError('Неверный логин или пароль')
         with self.tx():
             failure=self.con.execute('SELECT amount,until_time FROM failures WHERE login=?',(login,)).fetchone()
             if failure and failure[1]>now:raise SchoolError('Слишком много попыток; повторите через минуту')
@@ -181,16 +184,26 @@ class SchoolDB:
     def attempts(self,token):
         actor=self.actor(token)
         with self.lock:
-            rows=self.con.execute('SELECT a.id,u.name,t.title,a.status,a.created,a.started,a.ended,a.score,a.total,a.run_dir,a.source FROM attempts a JOIN users u ON a.user_id=u.id JOIN tests t ON a.test_id=t.id'+(' WHERE u.id=?' if actor['role']=='student' else '')+' ORDER BY a.created DESC LIMIT 200', (actor['id'],) if actor['role']=='student' else ()).fetchall()
+            query="""SELECT a.id,u.name,t.title,a.status,a.created,a.started,a.ended,a.score,a.total,a.run_dir,a.source,
+                (SELECT COUNT(*) FROM evidence e WHERE e.attempt_id=a.id AND e.kind='episodes' AND e.level=1) AS yellow,
+                (SELECT COUNT(*) FROM evidence e WHERE e.attempt_id=a.id AND e.kind='episodes' AND e.level=2) AS red
+                FROM attempts a JOIN users u ON a.user_id=u.id JOIN tests t ON a.test_id=t.id"""
+            query+=(' WHERE u.id=?' if actor['role']=='student' else '')+' ORDER BY a.created DESC LIMIT 200'
+            rows=self.con.execute(query,(actor['id'],) if actor['role']=='student' else ()).fetchall()
         return [dict(r) for r in rows]
 
     def interrupt(self,token,ident):
         with self.tx():
             actor=self.actor(token)
             row=self.con.execute('SELECT * FROM attempts WHERE id=?',(ident,)).fetchone()
-            if not row or actor['role']=='student' and row['user_id']!=actor['id']:raise SchoolError('Доступ запрещён')
+            if not row or actor['role']=='student' and (row['user_id']!=actor['id'] or row['status']!='preparing'):raise SchoolError('Доступ запрещён')
             if row['status'] in ('preparing','calibrating','running'):
                 self.con.execute("UPDATE attempts SET status='interrupted',ended=? WHERE id=?",(time.time(),ident))
+
+    def lease_status(self,lease):
+        with self.lock:
+            row=self.con.execute('SELECT status FROM attempts WHERE lease_hash=?',(self.digest(lease),)).fetchone()
+        return row[0] if row else 'interrupted'
 
     def guard_credentials(self):
         # Only used to configure existing Windows guards; never returned through UI/student APIs.
@@ -198,9 +211,27 @@ class SchoolDB:
         if not row:raise SchoolError('Нет администратора')
         return dict(salt_hex=row[0],hash_hex=row[1],iterations=row[2])
 
+    def privileged_session(self,password):
+        if len(password)>256:return None
+        now=time.time();valid=None
+        with self.tx():
+            failed=self.con.execute("SELECT amount,until_time FROM failures WHERE login='__examiner_gate__'").fetchone()
+            if failed and failed[1]>now:return None
+            rows=self.con.execute("SELECT id,salt,hash,iterations FROM users WHERE role IN ('admin','examiner') AND active=1").fetchall()
+            for r in rows:
+                found=hmac.compare_digest(hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(r[1]),r[3]).hex(),r[2])
+                if found:valid=r[0]
+            if valid:
+                self.con.execute("DELETE FROM failures WHERE login='__examiner_gate__'")
+                token=secrets.token_urlsafe(32);self.con.execute('INSERT INTO sessions VALUES(?,?,?)',(self.digest(token),valid,now+300));return token
+            amount=(failed[0] if failed and failed[1]==0 else 0)+1
+            self.con.execute("INSERT OR REPLACE INTO failures VALUES('__examiner_gate__',?,?)",(amount,now+60 if amount>=5 else 0))
+        return None
+
     def privileged_password(self,password):
-        with self.lock:rows=self.con.execute("SELECT salt,hash,iterations FROM users WHERE role IN ('admin','examiner') AND active=1").fetchall()
-        return any(hmac.compare_digest(hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(r[0]),r[2]).hex(),r[1]) for r in rows)
+        token=self.privileged_session(password)
+        if token:self.logout(token)
+        return bool(token)
 
     def inspection(self,token,ident):
         self.actor(token,('admin','examiner'))
@@ -220,12 +251,14 @@ class SchoolDB:
         # Called after CV writers stop; a closed quiz still permits this one archive step.
         with self.lock:row=self.con.execute('SELECT id,run_dir FROM attempts WHERE lease_hash=?',(self.digest(lease),)).fetchone()
         if not row or not row['run_dir']:return
-        db=Path(row['run_dir'])/'session.db'
+        directory=Path(row['run_dir']).resolve()
+        if not directory.is_relative_to((self.path.parent/'sessions').resolve()):raise SchoolError('Неверный путь к записям')
+        db=directory/'session.db'
         con=sqlite3.connect(db.as_uri()+'?mode=ro',uri=True,timeout=1);con.row_factory=sqlite3.Row
         try:
             with self.tx():
                 for table,key in (('events','id'),('episodes','ident'),('clips','path')):
-                    for item in con.execute('SELECT * FROM '+table):self.con.execute('INSERT OR REPLACE INTO evidence VALUES(?,?,?,?)',(row['id'],table,str(item[key]),json.dumps(dict(item),ensure_ascii=False)))
+                    for item in con.execute('SELECT * FROM '+table):self.con.execute('INSERT OR REPLACE INTO evidence(attempt_id,kind,source_id,payload,level) VALUES(?,?,?,?,?)',(row['id'],table,str(item[key]),json.dumps(dict(item),ensure_ascii=False),item['level'] if table=='episodes' else None))
         finally:con.close()
 
     def close(self):
