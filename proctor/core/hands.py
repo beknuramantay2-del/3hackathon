@@ -1,5 +1,6 @@
 """Gated Hands worker; ROI near current phone, never run when no phone is observed."""
 import cv2
+import time
 from .worker import LatestWorker
 from .models import HandResult
 
@@ -21,9 +22,11 @@ class HandsThread(LatestWorker):
     def process(self, packet):
         result = HandResult(seq=packet.seq,captured_at=packet.captured_at)
         phones = self.phone_provider()
-        if phones is None or packet.captured_at-phones.captured_at > .5:
+        if phones is None or not 0<=packet.captured_at-phones.captured_at<=.5:
             return result
-        observed = [b for b in phones.phones if b.observed and b.confirmed]
+        observed = [b for b in phones.phones if b.observed and (b.confirmed or b.conf>=.15)]
+        if not observed:
+            observed=[b for b in phones.candidates if b.conf>=.15]
         if not observed:
             return result
         h,w = packet.frame.shape[:2]
@@ -41,7 +44,9 @@ class HandsThread(LatestWorker):
             roi = cv2.resize(roi,(320,max(1,int(rh*320/rw))))
         rgb = cv2.cvtColor(roi,cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
+        start=time.perf_counter()
         res = self.hands.process(rgb)
+        result.timings["hands"]=time.perf_counter()-start
         for hand in res.multi_hand_landmarks or []:
             xs = [p.x*rw+x1 for p in hand.landmark]
             ys = [p.y*rh+y1 for p in hand.landmark]

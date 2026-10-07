@@ -83,4 +83,4 @@ def hardware_profile(mode="auto"):
     # Start conservatively; measured worker latency, not core count alone, controls rate.
     return dict(width=640, height=480, imgsz=416 if weak else 640,
                 yolo_fps=6 if weak else 10, face_fps=12 if weak else 20,
-                hands_fps=4 if weak else 6, threads=max(1, min(4, cores//2)))
+                hands_fps=4 if weak else 6, threads=1 if weak else max(1,min(2,cores//2)))

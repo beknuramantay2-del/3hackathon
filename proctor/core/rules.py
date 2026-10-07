@@ -56,6 +56,7 @@ class RuleEngine:
 
     def on_face(self,f):
         if f.primary_changed:
+            self.calib={}
             self.reset()
         self.face = f
 
@@ -84,7 +85,7 @@ class RuleEngine:
                 return True
         return False
 
-    def tick(self,now=None):
+    def tick(self,now=None,directions_enabled=True):
         now = time.monotonic() if now is None else now
         f,y = self.face,self.yolo
         ff,yf,hf = self.fresh(f,now),self.fresh(y,now),self.fresh(self.hands,now,.5)
@@ -116,7 +117,7 @@ class RuleEngine:
                     and f.variance < self.cfg["rules"]["camera_covered"]["variance_thresh"]}
         for prefix,state in (("HEAD",head),("GAZE",gaze)):
             for d in ("LEFT","RIGHT","UP","DOWN"):
-                conds[f"{prefix}_{d}"] = state == d
+                conds[f"{prefix}_{d}"] = directions_enabled and state == d
         out = []
         for k,c in conds.items():
             if self.cfg["rules"][self.key_of[k]].get("enabled",True) and self.rules[k].update(c,now):
@@ -130,5 +131,6 @@ class RuleEngine:
                           calibrated=bool(self.calib),n_faces=f.n_faces if ff else None,
                           phones=len(y.phones) if yf else None,bright=f.brightness,conds=conds,
                           durations={k:r.active_duration(now) for k,r in self.rules.items()},
+                          warnings_active=[k for k in conds if conds[k] and self.rules[k].active_duration(now)>=self.rules[k].hold],
                           camera_fresh=ff,phone_aimed="heuristic: position+hold, not camera orientation")
         return out

@@ -118,6 +118,7 @@ def main():
                           max_width=fc.get("max_width",640),min_detection_confidence=fc["min_detection_confidence"],
                           min_tracking_confidence=fc["min_tracking_confidence"],adaptive=adaptive)
     hands = HandsThread(yolo.output.peek,min(fc.get("hands_fps",5),profile["hands_fps"]),parent=app) if fc.get("hands_enabled",True) else None
+    yolo.hand_provider=(lambda:hands.output.peek()) if hands else None
     workers = [yolo,face]+([hands] if hands else [])
     for worker in workers:
         cam.subscribe(worker.push)  # bounded pointer replacement, not queued Qt signals

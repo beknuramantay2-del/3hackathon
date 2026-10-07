@@ -14,7 +14,8 @@ from proctor.core.pipeline import hardware_profile,Timings
 from proctor.core.overlay import render_overlay
 from proctor.core.store import Store,EventWriter
 from proctor.core.events import make_violation,SEVERITY
-from proctor.ui.monitor_window import MonitorWindow
+from proctor.ui.monitor_window import MonitorWindow,DIRECTIONS
+from proctor.core.presentation import event_label
 from proctor.guard.hotkeys import HotkeyGuard
 from proctor.guard.focus import FocusWatch
 from proctor.guard.processes import ProcWatch
@@ -62,6 +63,7 @@ def main():
         max_width=fc.get('max_width',640),min_detection_confidence=fc['min_detection_confidence'],
         min_tracking_confidence=fc['min_tracking_confidence'],adaptive=adaptive)
     hands=HandsThread(yolo.output.peek,fc.get('hands_fps',5)) if fc.get('hands_enabled',True) else None
+    yolo.hand_provider=(lambda:hands.output.peek()) if hands else None
     workers=[yolo,face]+([hands] if hands else [])
     for worker in workers:
         cam.subscribe(worker.push)
@@ -81,12 +83,16 @@ def main():
     poll_versions={w:-1 for w in workers}
     last_frame=-1
     last_ui=0.
-    auto_center_attempted=False
+    metrics_at=0.
+    stage_text="—"
+    import psutil
+    process=psutil.Process();process.cpu_percent(None)
+    resource_text="—"
 
     def event(kind,details=None):
-        if finished or calibration is not None or kind not in SEVERITY:
+        if finished or kind not in SEVERITY:
             return
-        if kind.startswith(("HEAD_","GAZE_")) and not engine.calib:
+        if kind.startswith(("HEAD_","GAZE_")) and (not engine.calib or calibration is not None):
             return
         now=time.monotonic()
         if now-last_events.get(kind,-1e6)<5:
@@ -102,7 +108,7 @@ def main():
         data["frame_age_ms"]=(now-packet.captured_at)*1000 if packet else None
         frame=packet.frame if cfg['store']['save_screenshots'] and packet and now-packet.captured_at<.7 else None
         writer.submit(violation,frame)
-        window.log(f'{time.strftime("%H:%M:%S")} · {kind} · удержание {duration:.1f}с')
+        window.log(f'{time.strftime("%H:%M:%S")} · {event_label(kind)} · {duration:.1f} с')
     signals.event.connect(event)
     guard_on=not args.no_guard and not args.demo and cfg['profile']=='exam'
     hk=HotkeyGuard(cfg['guard']['hotkeys'],cfg['guard']['exit_combo'],
@@ -133,27 +139,37 @@ def main():
     window.finish.connect(exit_requested)
     window.phone_threshold.setValue(yc['conf_phone'])
     window.phone_threshold.valueChanged.connect(lambda value:setattr(yolo,'requested_confidence',float(value)))
+    window.gaze_hold.setValue(cfg['rules']['gaze_side']['hold'])
+    window.down_hold.setValue(cfg['rules']['gaze_down']['hold'])
     def set_hold(value):
-        for key,rule in engine.rules.items():
-            if key.startswith('GAZE_'):
-                rule.hold=value
+        for key in ('GAZE_LEFT','GAZE_RIGHT'):engine.rules[key].hold=value
+    def set_down_hold(value):
+        for key in ('GAZE_UP','GAZE_DOWN'):engine.rules[key].hold=value
     window.gaze_hold.valueChanged.connect(set_hold)
+    window.down_hold.valueChanged.connect(set_down_hold)
     window.yaw_threshold.setValue(cfg['rules']['gaze_side']['yaw_thresh'])
     window.pitch_threshold.setValue(cfg['rules']['gaze_down']['pitch_thresh'])
     window.yaw_threshold.valueChanged.connect(lambda value:cfg['rules']['gaze_side'].update(yaw_thresh=value))
     window.pitch_threshold.valueChanged.connect(lambda value:cfg['rules']['gaze_down'].update(pitch_thresh=value))
     def start_calibration(mode):
         nonlocal calibration,calibration_mode,next_phase
+        if window.locked and engine.calib:
+            fw.enabled=False
+            password,ok=QInputDialog.getText(window,'Повторная настройка','Пароль экзаменатора:',QLineEdit.EchoMode.Password)
+            fw.enabled=True;ex=cfg['guard']['examiner']
+            if not ok or not verify_password(password,ex['salt_hex'],ex['hash_hex'],ex['iterations']):return
         if face.status!='ready':
             window.banner.setText('FaceMesh ещё не готов: '+(face.error or face.status));return
-        calibration=Calibration(20 if mode=='five' else 2)
+        calibration=Calibration(10 if mode=='five' else 2,min_samples=6,settle=.4,reject_head_motion=True)
         calibration.start(time.monotonic())
         calibration_mode=mode;next_phase=None
         engine.reset()
     window.calibrate.connect(start_calibration)
+    if guard_on:
+        for control in (window.phone_threshold,window.gaze_hold,window.down_hold,window.yaw_threshold,window.pitch_threshold):control.setEnabled(False)
 
     def poll():
-        nonlocal last_frame,last_ui,calibration,calibration_mode,next_phase,auto_center_attempted
+        nonlocal last_frame,last_ui,calibration,calibration_mode,next_phase,metrics_at,stage_text,resource_text
         now=time.monotonic()
         for worker in workers:
             result=worker.output.peek()
@@ -175,31 +191,31 @@ def main():
                 engine.on_yolo(result)
             else:
                 engine.on_hands(result)
-        if not auto_center_attempted and face.output.peek() is not None and engine.face.n_faces==1 and engine.face.pose_valid and engine.face.gaze_valid:
-            auto_center_attempted=True
-            start_calibration('center')
         if calibration:
             elapsed=now-calibration.started_at
             pose='CENTER' if calibration_mode=='center' else calibration.phase(elapsed)
             if pose!=next_phase:
                 next_phase=pose;window.show_target(pose);QApplication.beep()
-            window.banner.setText(f'КАЛИБРОВКА {pose}: глаза на точку, голова прямо · {max(0,calibration.duration-elapsed):.1f}с')
+            window.banner.setText('Настройка взгляда: следуйте точке, не поворачивая голову')
+            window.calibration_running(pose,max(0,calibration.duration-elapsed),calibration.duration)
             if elapsed>=calibration.duration:
                 try:
-                    base=calibration.finish(center_only=calibration_mode=='center')
+                    base=calibration.finish(center_only=calibration_mode=='center',allow_partial=True)
                     base["mode"]=calibration_mode
                     engine.calib=base
                     engine.reset()
-                    window.log('Центр головы/каждого глаза обновлён. '+('Центр измерен; 5 поз — отдельной кнопкой' if calibration_mode=='center' else ('Все позы измерены' if not base['unresolved_targets'] else 'Не различены: '+', '.join(base['unresolved_targets']))))
+                    message=('Центр обновлён. Персональные направления уточняются кнопкой «Настроить взгляд». ' if calibration_mode=='center' else ('Готово: все пять направлений измерены.' if not base['unresolved_targets'] else 'Центр сохранён. Пока не различены: '+', '.join(DIRECTIONS[k] for k in base['unresolved_targets'])))
+                    window.log(message);window.calibration_finished(message)
                 except CalibrationError as exc:
-                    window.log('Калибровка не принята: '+str(exc))
+                    message='Не удалось настроить: '+str(exc)
+                    window.log(message);window.calibration_finished(message)
                 calibration=None;window.target.hide();QApplication.beep()
         if face.status!="ready" or face.output.peek() is None:
             engine.face.error=face.error or "FaceMesh loading/unavailable"
         if yolo.status!="ready" or yolo.output.peek() is None:
             engine.yolo.error=yolo.error or "YOLO loading/unavailable"
         s=time.perf_counter()
-        types=engine.tick(now)
+        types=engine.tick(now,directions_enabled=bool(engine.calib) and calibration is None)
         timings.add('logic',time.perf_counter()-s)
         for kind in types:
             event(kind)
@@ -209,7 +225,7 @@ def main():
         if packet and packet.seq!=last_frame:
             last_frame=packet.seq
             s=time.perf_counter()
-            vis=render_overlay(packet,engine.face,engine.yolo,engine.hands,cfg['camera']['mirror_preview'])
+            vis=render_overlay(packet,engine.face,engine.yolo,engine.hands,cfg['camera']['mirror_preview'],states=engine.debug)
             window.show_frame(vis)
             timings.add('ui_render',time.perf_counter()-s)
         if now-last_ui<.15:
@@ -220,11 +236,18 @@ def main():
         yf=yolo.status=='ready' and y.seq>=0 and engine.fresh(y,now)
         face_text=str(f.n_faces) if ff else 'UNKNOWN'
         phone_text='CONFIRMED' if yf and y.phone_voted else ('CANDIDATE' if yf and y.candidates else ('НЕ НАБЛЮДАЕТСЯ' if yf else 'UNKNOWN'))
-        window.tiles.setText(f'HEAD: {d.get("head")}\nGAZE: {d.get("gaze")}\nFACE: {face_text}\nPHONE: {phone_text}')
-        window.show_directions(d.get('head'),d.get('gaze'))
+        phone_display={'CONFIRMED':'подтверждён','CANDIDATE':'кандидат, проверяем','НЕ НАБЛЮДАЕТСЯ':'не обнаружен','UNKNOWN':'нет свежих данных'}[phone_text]
+        window.set_observation(('не обнаружено' if f.n_faces==0 else 'ученик в кадре' if f.n_faces==1 else f'{f.n_faces} · возможен второй человек') if ff else 'нет свежих данных',phone_display)
+        window.show_directions(d.get('head'),d.get('gaze'),bool(engine.calib))
+        window.highlight_gaze(bool(engine.calib) and calibration is None and any(k.startswith('GAZE_') for k in d.get('warnings_active',[])))
+        if d.get('gaze')=='UNKNOWN':window.gaze_card.note.setText(f.gaze_reason or 'Нет свежего измерения глаз')
+        seconds=int(now-started);window.session_clock.setText(f'{seconds//60:02}:{seconds%60:02}')
+        window.mode_label.setText('Защищённый режим' if guard_on else 'Просмотр CV · защита выключена')
         errors=[type(w).__name__+': '+w.error for w in workers if w.status=='error']
         if not calibration:
-            window.banner.setText(' · '.join(errors) if errors else ('Детекция активна. Калибровка: '+(str(engine.calib.get('mode','center')) if engine.calib else 'НЕТ — нажмите «Центр 2с»; HEAD/GAZE предупреждения отключены')+' · '+('VIDEO REPLAY' if args.video else 'CAMERA')+' · '+cam.status))
+            source='Видео · не физическая камера' if args.video else 'Камера'
+            healthy=face.status=='ready' and yolo.status=='ready' and packet is not None and now-packet.captured_at<1
+            window.banner.setText(' · '.join(errors) if errors else source+' · '+('Наблюдение активно' if healthy else 'Подготовка / нет свежего кадра')+(' · взгляд настроен' if engine.calib else ' · нажмите «Настроить взгляд», смотрите прямо'))
         t=d.get('thresholds',{})
         left='—' if f.left_eye is None else f'{f.left_eye[0]:.3f}/{f.left_eye[1]:.3f}'
         right='—' if f.right_eye is None else f'{f.right_eye[0]:.3f}/{f.right_eye[1]:.3f}'
@@ -241,12 +264,15 @@ def main():
             f'GAZE вход L/R/U/D: {gate_text}\n'
             f'Phone P={confidence}; новый track ≥ {yolo.conf_phone:.2f}; imgsz {yolo.budget.imgsz}'+(' · weak recovery: strong ≤0.8с' if recovery else '')+'\n'
             f'HEAD quality: {"valid" if f.pose_valid and ff else f.pose_reason or "нет свежего измерения"}; GAZE: {f.gaze_reason or "нет измерения"}')
-        active=[(rule.active_duration(now)/max(.01,rule.hold),key,rule) for key,rule in engine.rules.items() if d['conds'].get(key)]
-        if active:
+        active=[(rule.active_duration(now)/max(.01,rule.hold),key,rule) for key,rule in engine.rules.items() if d['conds'].get(key) and (not key.startswith(('HEAD_','GAZE_')) or engine.calib)]
+        gaze_active=[a for a in active if a[1].startswith('GAZE_')]
+        if gaze_active:active=gaze_active
+        if active and calibration is None:
             fraction,key,rule=max(active)
             window.progress.setValue(min(100,int(100*fraction)))
-            window.progress.setFormat(f'{key}: {rule.active_duration(now):.1f}/{rule.hold:.1f}с')
-        else:
+            window.progress.setFormat(f'{event_label(key)}: {rule.active_duration(now):.1f} / {rule.hold:.1f} с')
+            if key.startswith('GAZE_'):window.gaze_card.note.setText('Удержание '+f'{rule.active_duration(now):.1f} / {rule.hold:.1f} с'+(' · событие' if fraction>=1 else ' · пока без события'))
+        elif calibration is None:
             window.progress.setValue(0);window.progress.setFormat('Нет активного удержания')
         def state_for(key):
             return ('АКТИВНО · ' if d['conds'].get(key) else 'не наблюдается · ')+f'{d["durations"].get(key,0):.1f}/{engine.rules[key].hold:.1f}с'
@@ -256,8 +282,8 @@ def main():
             if item in ('RAISED','AIM'):
                 available=available and ff and f.face_box is not None
             window.set_case(item,(state_for(kind) if available else 'UNKNOWN: модуль/данные недоступны')+(' · эвристика' if item=='AIM' else ''))
-        window.set_case('HEAD',d['head']+' · независимо от глаз')
-        window.set_case('GAZE',d['gaze']+(' · персональный центр' if engine.calib else ' · предварительно'))
+        window.set_case('HEAD',DIRECTIONS[d['head']]+' · независимо от глаз')
+        window.set_case('GAZE',DIRECTIONS[d['gaze']]+(' · персональный центр' if engine.calib else ' · предварительно'))
         window.set_case('DOWN',state_for('GAZE_DOWN') if engine.calib and f.gaze_valid and ff else 'UNKNOWN: требуется центр / читаемые глаза')
         window.set_case('SIDE',state_for('GAZE_LEFT')+' / '+state_for('GAZE_RIGHT') if engine.calib and f.gaze_valid and ff else 'UNKNOWN: требуется центр / читаемые глаза')
         window.set_case('PRESENCE','Лиц: '+face_text+(' · landmarks потеряны' if ff and not f.pose_valid else ''))
@@ -270,8 +296,14 @@ def main():
         window.set_case('TABS','Нет браузера в этом режиме. Защита вкладок — --embedded-test')
         age=lambda r: f'{(now-r.captured_at)*1000:.0f}ms' if r.seq>=0 else '—'
         camera_rate=cam.camera_fps if packet and now-packet.captured_at<1 else 0.
+        if now-metrics_at>=1:
+            metrics_at=now
+            resource_text=f'CPU процесса: {process.cpu_percent(None):.0f}% (может быть >100% на нескольких ядрах); RAM: {process.memory_info().rss/1024**2:.0f} MiB'
+            stats=timings.snapshot()
+            stage_text=' · '.join(name+': '+f'{stats[name]["mean_ms"]:.1f}ms' for name in ('yolo','tracker','face_scan','mediapipe','head_pose','eye_gaze','hands','logic','ui_render') if name in stats)
         window.performance.setText(f'Реально: Camera {camera_rate:.1f}fps, YOLO {yolo.actual_fps if yf else 0.:.1f}Hz, Face {face.actual_fps if ff else 0.:.1f}Hz\n'
             f'Возраст данных: YOLO {age(y)}, Face {age(f)}. Пропущено кадров YOLO {yolo.skipped_frames} / Face {face.skipped_frames}\n'
+            f'Среднее время этапов: {stage_text}\n{resource_text}\n'
             f'Сессия {(now-started):.0f}с · очередь записи: {writer.queue.unfinished_tasks} · '+('Ошибка записи: '+writer.error if writer.error else 'БД локальная'))
     timer=QTimer();timer.timeout.connect(poll);timer.start(33)
     for w in workers:
@@ -300,7 +332,10 @@ def main():
             frames_yolo=yolo.processed_count,frames_face=face.processed_count,
             head=engine.debug.get('head'),gaze=engine.debug.get('gaze'),
             case_status={key:window.checklist.item(row,1).text() for key,row in window.rows.items()},
-            calibration=engine.calib.get('mode'),guard=hk.status),ensure_ascii=False,indent=2))
+            calibration=engine.calib.get('mode'),guard=hk.status,
+            effective_holds={key:rule.hold for key,rule in engine.rules.items()},
+            gaze_entry_gates=engine.debug.get('gaze_entry_gates'),
+            phone_evidence=[dict(conf=p.conf,support=p.support_kind,observed=p.observed,confirmed=p.confirmed) for p in engine.yolo.phones]),ensure_ascii=False,indent=2))
         store.close();lock.unlock()
     app.aboutToQuit.connect(cleanup)
     try:

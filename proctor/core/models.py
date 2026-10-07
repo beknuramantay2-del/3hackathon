@@ -21,6 +21,7 @@ class FaceResult:
     gaze_reason: str = ""
     pose_reason: str = ""
     eye_points: list = field(default_factory=list)
+    eye_boxes: list = field(default_factory=list)
     seq: int = -1
     captured_at: float = 0.0
     processed_at: float = 0.0
@@ -36,6 +37,10 @@ class Box:
     observed: bool = True
     velocity: tuple = (0.,0.,0.,0.)
     strong_at: float | None = None
+    supported: bool = False
+    support_kind: str = ""
+    source: str = "global"
+    detail_agreement: bool = False
 
 @dataclass
 class YoloResult:
@@ -57,6 +62,7 @@ class HandResult:
     seq: int = -1
     captured_at: float = 0.0
     error: str = ""
+    timings: dict = field(default_factory=dict)
 
 @dataclass
 class Violation:

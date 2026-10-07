@@ -1,7 +1,7 @@
 """Overlay fresh detections on the latest preview; mirror pixels, never text/directions."""
 import cv2
 
-def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35):
+def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35,states=None):
     vis = cv2.flip(packet.frame,1) if mirror else packet.frame.copy()
     h,w = vis.shape[:2]
     def draw(rect,label,color):
@@ -17,6 +17,8 @@ def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35):
     def fresh(result):
         return result is not None and result.captured_at > 0 and 0 <= packet.captured_at-result.captured_at <= max_age and not result.error
     if fresh(face):
+        for eye in face.eye_boxes:
+            draw(eye,"eye",(230,160,85))
         for b in face.face_boxes:
             draw(b,"face",(80,210,100) if b == face.face_box else (60,190,240))
         for point in face.eye_points:
@@ -24,6 +26,14 @@ def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35):
             if mirror:
                 x=w-x
             cv2.circle(vis,(x,y),3,(240,220,40),-1)
+            if states and states.get("calibrated") and face.gaze_valid:
+                gaze=states.get("gaze","UNKNOWN")
+                sign=1 if mirror else -1
+                vectors={"LEFT":(-18*sign,0),"RIGHT":(18*sign,0),"UP":(0,-18),"DOWN":(0,18)}
+                if gaze in vectors:
+                    dx,dy=vectors[gaze]
+                    color=(50,180,240) if "GAZE_"+gaze in states.get("warnings_active",[]) else (240,180,75)
+                    cv2.arrowedLine(vis,(x,y),(max(1,min(w-2,x+dx)),max(1,min(h-2,y+dy))),color,2,tipLength=.4)
     if fresh(yolo):
         for b in yolo.persons:
             draw((b.x1,b.y1,b.x2,b.y2),"person",(240,140,70))
@@ -31,8 +41,8 @@ def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35):
             if not any(abs(b.x1-p.x1)+abs(b.y1-p.y1)<12 for p in yolo.phones):
                 draw((b.x1,b.y1,b.x2,b.y2),f"candidate {b.conf:.2f}",(40,180,240))
         for b in yolo.phones:
-            label = f"phone #{b.track_id} {b.conf:.2f}"+(" predicted" if not b.observed else "")
-            color = (80,80,240) if b.confirmed and b.observed else (150,150,150)
+            label = ("phone" if b.confirmed else "candidate")+f" #{b.track_id} {b.conf:.2f}"+(" predicted" if not b.observed else " "+b.support_kind if b.supported else "")
+            color = (80,80,240) if b.confirmed and b.observed else (40,180,240) if b.observed else (150,150,150)
             # Extrapolate only the overlay to the displayed frame; never feed this back into rules.
             dt = min(.15,max(0.,packet.captured_at-yolo.captured_at))
             predicted = tuple(x+v*dt for x,v in zip((b.x1,b.y1,b.x2,b.y2),b.velocity))

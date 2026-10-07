@@ -4,6 +4,7 @@ import time
 from .worker import LatestWorker
 from .models import YoloResult,Box
 from .tracking import LiteTracker,iou,coords
+from .phone_evidence import PartialPhoneEvidence
 
 class DetectorYolo(LatestWorker):
     def __init__(self,model_name="yolov8n.pt",imgsz=640,conf_phone=.25,
@@ -21,6 +22,8 @@ class DetectorYolo(LatestWorker):
         self.model=None
         self.requested_confidence=conf_phone
         self.detail_search=detail_search
+        self.hand_provider=None
+        self.partial_evidence=PartialPhoneEvidence()
         self.calls=0
         self.tile=0
 
@@ -48,6 +51,7 @@ class DetectorYolo(LatestWorker):
             x1,y1,x2,y2,confidence,cls=row[:6]
             box=Box(float(confidence),int(x1+dx),int(y1+dy),int(x2+dx),int(y2+dy))
             if int(cls)==self.PHONE:
+                box.source="detail" if classes==[self.PHONE] else "global"
                 phones.append(box)
             elif int(cls)==self.PERSON and confidence>=self.conf_person:
                 persons.append(box)
@@ -76,6 +80,7 @@ class DetectorYolo(LatestWorker):
             for track in self.tracker.tracks.values():
                 track.hits=0
                 track.last_strong=None
+            self.partial_evidence.history=[]
         self.conf_phone=self.requested_confidence
         self.tracker.strong=self.conf_phone
         self.calls+=1
@@ -92,16 +97,20 @@ class DetectorYolo(LatestWorker):
                 phones.extend(detail)
         inferred=time.perf_counter()
         # Merge global/ROI duplicates before assigning IDs.
+        for box in phones:
+            box.detail_agreement=any(other.source!=box.source and iou(coords(box),coords(other))>.25 for other in phones)
         unique=[]
         for box in sorted(phones,key=lambda b:b.conf,reverse=True):
-            if not any(iou(coords(box),coords(other))>.45 for other in unique):
+            if not any(iou(coords(box),coords(other))>(.25 if box.source!=other.source else .45) for other in unique):
                 unique.append(box)
         tracking_started=time.perf_counter()
+        hand_result=self.hand_provider() if self.hand_provider else None
+        self.partial_evidence.update(unique,hand_result,packet.captured_at,self.conf_phone)
         tracks=self.tracker.update(unique,packet.captured_at)
         for b in tracks:
             anchored=b.strong_at is not None and 0<=packet.captured_at-b.strong_at<=.8
             # Only current observations can recover evidence; predicted-only tracks never count.
-            b.confirmed=b.confirmed and (b.conf>=self.conf_phone or anchored)
+            b.confirmed=b.confirmed and (b.conf>=self.conf_phone or anchored or b.supported)
         voted=any(b.confirmed and b.observed for b in tracks)
         return YoloResult(phones=tracks,candidates=unique,n_persons=len(persons),persons=persons,
             phone_voted=voted,inference_size=self.budget.imgsz,seq=packet.seq,captured_at=packet.captured_at,

@@ -7,8 +7,9 @@ class CalibrationError(ValueError):
     pass
 
 class Calibration:
-    def __init__(self, duration=20.0):
+    def __init__(self, duration=20.0, min_samples=8, settle=.7, reject_head_motion=False):
         self.duration = duration
+        self.min_samples,self.settle,self.reject_head_motion=min_samples,settle,reject_head_motion
         self.samples = {p:[] for p in POSES}
         self.eye_samples = {p:[] for p in POSES}
         self.done = False
@@ -29,33 +30,43 @@ class Calibration:
             return False
         if now is not None and self.started_at is not None:
             elapsed = now-self.started_at
-            if elapsed < 0 or elapsed >= self.duration or elapsed % (self.duration/5) < .7:
+            if elapsed < 0 or elapsed >= self.duration or elapsed % (self.duration/5) < self.settle:
                 return False
             pose = self.phase(elapsed)
         values = (yaw,pitch,iris_h,iris_v)
         if not np.isfinite(values).all():
             return False
         label = pose or "CENTER"
+        if self.reject_head_motion and label != "CENTER" and len(self.samples["CENTER"])>=self.min_samples:
+            center=np.median(self.samples["CENTER"],axis=0)
+            if abs(yaw-center[0])>7 or abs(pitch-center[1])>7:
+                return False
         self.samples[label].append(values)
         self.eye_samples[label].append((left_eye,right_eye))
         return True
 
     @staticmethod
-    def trimmed(samples):
-        if len(samples) < 8:
+    def trimmed(samples,minimum=8):
+        if len(samples) < minimum:
             raise CalibrationError("Недостаточно стабильных кадров: повторите калибровку")
         a = np.asarray(samples)
         med = np.median(a,axis=0)
         mad = np.median(np.abs(a-med),axis=0)
         keep = (np.abs(a-med) <= np.maximum(3.5*1.4826*mad, [1.,1.,.015,.015])).all(axis=1)
         a = a[keep]
-        if len(a) < 8:
+        if len(a) < minimum:
             raise CalibrationError("Слишком много шума: больше света и повторная калибровка")
         return np.median(a,axis=0), np.median(np.abs(a-np.median(a,axis=0)),axis=0)
 
-    def finish(self, center_only=False):
+    def finish(self, center_only=False, allow_partial=False):
         required = ("CENTER",) if center_only else POSES
-        measured = {p:self.trimmed(self.samples[p]) for p in required}
+        measured={"CENTER":self.trimmed(self.samples["CENTER"],self.min_samples)}
+        for p in required:
+            if p=="CENTER":continue
+            try:
+                measured[p]=self.trimmed(self.samples[p],self.min_samples)
+            except CalibrationError:
+                if not allow_partial:raise
         c,mad = measured["CENTER"]
         if mad[0] > 6 or mad[1] > 6 or max(mad[2:]) > .06:
             raise CalibrationError("Центральная поза нестабильна: повторите")
@@ -68,10 +79,10 @@ class Calibration:
                          head_targets={},gaze_targets={},eye_centers={})
         for index,name in enumerate(("left","right")):
             values = [row[index] for row in self.eye_samples["CENTER"] if row[index] is not None]
-            if len(values) >= 8:
+            if len(values) >= self.min_samples:
                 self.base["eye_centers"][name] = list(map(float,np.median(values,axis=0)))
         for p in required:
-            if p == "CENTER":
+            if p == "CENTER" or p not in measured:
                 continue
             d = measured[p][0]-c
             axis = 0 if p in ("LEFT","RIGHT") else 1

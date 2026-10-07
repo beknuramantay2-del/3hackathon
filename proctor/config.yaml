@@ -1,5 +1,5 @@
 # Профиль: dev (разработка и демо) или exam (боевой режим).
-# В exam пустые test_url и пароль экзаменатора блокируют старт с ошибкой.
+# В exam нужен пароль экзаменатора. URL нужен только --embedded-test.
 profile: dev
 
 test:
@@ -32,8 +32,7 @@ yolo:
   offline: true
   phone_class: 67
   person_class: 0
-  # Телефон считается найденным, если виден не менее vote_threshold
-  # из последних vote_window YOLO-кадров.
+  # Legacy-параметры совместимости. В live используются tracker + время + подтверждения.
   vote_window: 8
   vote_threshold: 4
 

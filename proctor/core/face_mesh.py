@@ -124,7 +124,11 @@ class FaceMeshThread(LatestWorker):
             result.gaze_reason="Оба глаза" if len(valid)==2 else "Один глаз; ограниченная надёжность"
         else:
             result.gaze_reason="Зрачки не читаются: моргание/малые глаза/перекрытие или несогласие глаз"
-        result.eye_points=[tuple(map(int,pts[i])) for i in (468,473)] if len(pts)>473 else []
+        result.eye_points=[tuple(map(int,pts[i])) for i,e in ((468,right),(473,left)) if e is not None]
+        for indices,e in (((33,133,159,145),right),((362,263,386,374),left)):
+            if e is not None:
+                eye=pts[list(indices)]
+                result.eye_boxes.append((int(eye[:,0].min())-3,int(eye[:,1].min())-3,int(eye[:,0].max())+3,int(eye[:,1].max())+3))
         result.timings["eye_gaze"]=time.perf_counter()-s
         result.processed_at=time.monotonic()
         return result

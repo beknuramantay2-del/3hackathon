@@ -46,7 +46,7 @@ class LiteTracker:
             for k in unused:
                 for i in remaining:
                     d = detections[i]
-                    if (d.conf >= self.strong) != high:
+                    if (d.conf >= self.strong or d.supported) != high:
                         continue
                     track = self.tracks[k]
                     predicted = track.predict(now)
@@ -75,17 +75,18 @@ class LiteTracker:
                 bbox = tuple(.8*x + .2*p for x,p in zip(coords(d), pred))
                 t.velocity = tuple(.4*v + .6*(x-o)/dt for v,x,o in zip(t.velocity,bbox,t.bbox))
                 t.bbox, t.last_seen, t.conf = bbox, now, d.conf
-                t.hits += int(d.conf >= self.strong)
+                t.hits += int(d.conf >= self.strong or d.supported)
                 if d.conf >= self.strong:
                     t.last_strong = now
                 unused.remove(k); remaining.remove(i); observed.add(k)
         for i in sorted(remaining):
             d = detections[i]
-            if d.conf < self.strong:
+            if d.conf < self.strong and not d.supported:
                 continue
             k = self.next_id; self.next_id += 1
-            self.tracks[k] = Track(k, coords(d), now, d.conf, last_strong=now)
+            self.tracks[k] = Track(k, coords(d), now, d.conf, last_strong=now if d.conf >= self.strong else None)
             observed.add(k)
+        supported_ids={k for k in observed if any(d.supported and iou(coords(d),self.tracks[k].bbox)>.15 for d in detections)}
         return [Box(t.conf, *map(int, t.bbox if k in observed else t.predict(now)),
-                    track_id=k, confirmed=t.hits >= self.min_hits, observed=k in observed, velocity=t.velocity,strong_at=t.last_strong)
+                    track_id=k, confirmed=t.hits >= self.min_hits, observed=k in observed, velocity=t.velocity,strong_at=t.last_strong,supported=k in supported_ids,support_kind=next((d.support_kind for d in detections if d.supported and iou(coords(d),t.bbox)>.15),""))
                 for k,t in self.tracks.items()]

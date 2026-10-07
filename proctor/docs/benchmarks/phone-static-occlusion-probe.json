@@ -1,0 +1,383 @@
+{
+  "source": "COCO128 / image 000000000395, repeated static image, artificial 50% grey rectangle; not live camera accuracy",
+  "model": "yolov8n.pt",
+  "settings": {
+    "imgsz": 640,
+    "conf_phone": 0.25
+  },
+  "records": [
+    {
+      "scene": "full",
+      "frame": 0,
+      "phone": false,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 1,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 2,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 3,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 4,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 5,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 6,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 7,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 8,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 9,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 10,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "full",
+      "frame": 11,
+      "phone": true,
+      "candidates": [
+        0.318
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 0,
+      "phone": false,
+      "candidates": [
+        0.168,
+        0.166
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 1,
+      "phone": false,
+      "candidates": [
+        0.241,
+        0.168
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 2,
+      "phone": false,
+      "candidates": [
+        0.168,
+        0.166
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 3,
+      "phone": false,
+      "candidates": [
+        0.241,
+        0.168
+      ],
+      "hands": 0,
+      "support": true
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 4,
+      "phone": true,
+      "candidates": [
+        0.168,
+        0.166
+      ],
+      "hands": 0,
+      "support": true
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 5,
+      "phone": true,
+      "candidates": [
+        0.241,
+        0.168
+      ],
+      "hands": 0,
+      "support": true
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 6,
+      "phone": true,
+      "candidates": [
+        0.168,
+        0.166
+      ],
+      "hands": 0,
+      "support": true
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 7,
+      "phone": false,
+      "candidates": [
+        0.168,
+        0.166
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 8,
+      "phone": false,
+      "candidates": [
+        0.168,
+        0.166
+      ],
+      "hands": 1,
+      "support": false
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 9,
+      "phone": true,
+      "candidates": [
+        0.241,
+        0.168
+      ],
+      "hands": 1,
+      "support": true
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 10,
+      "phone": true,
+      "candidates": [
+        0.168,
+        0.166
+      ],
+      "hands": 1,
+      "support": true
+    },
+    {
+      "scene": "half_bottom",
+      "frame": 11,
+      "phone": true,
+      "candidates": [
+        0.241,
+        0.168
+      ],
+      "hands": 1,
+      "support": true
+    },
+    {
+      "scene": "half_left",
+      "frame": 0,
+      "phone": false,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 1,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 2,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 3,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 4,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 5,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 6,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 7,
+      "phone": true,
+      "candidates": [
+        0.426,
+        0.142
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 8,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 9,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 10,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    },
+    {
+      "scene": "half_left",
+      "frame": 11,
+      "phone": true,
+      "candidates": [
+        0.426
+      ],
+      "hands": 0,
+      "support": false
+    }
+  ]
+}
