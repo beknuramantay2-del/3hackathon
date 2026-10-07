@@ -118,10 +118,10 @@ class FaceMeshThread(LatestWorker):
         result.left_eye=self.left_filter.update(left,now) if left is not None else None
         result.right_eye=self.right_filter.update(right,now) if right is not None else None
         valid=[e for e in (result.left_eye,result.right_eye) if e is not None]
-        if gaze is not None and valid:
+        if gaze is not None and len(valid)==2:
             result.iris_h,result.iris_v=map(float,np.mean(valid,axis=0))
             result.gaze_valid=True
-            result.gaze_reason="Оба глаза" if len(valid)==2 else "Один глаз; ограниченная надёжность"
+            result.gaze_reason="Оба глаза"
         else:
             result.gaze_reason="Зрачки не читаются: моргание/малые глаза/перекрытие или несогласие глаз"
         result.eye_points=[tuple(map(int,pts[i])) for i,e in ((468,right),(473,left)) if e is not None]

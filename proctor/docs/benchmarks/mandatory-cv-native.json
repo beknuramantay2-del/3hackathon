@@ -1,0 +1,137 @@
+{
+  "source": "static public face replay; not physical webcam",
+  "native_suite": "159 passed (including 3 model and 1 WebEngine smoke)",
+  "duration_sec": 20,
+  "runtime": {
+    "source": "video",
+    "phone_confidence": 0.25,
+    "imgsz": 416,
+    "frames_camera": 556,
+    "frames_yolo": 90,
+    "frames_face": 211,
+    "head": "UNKNOWN",
+    "gaze": "UNKNOWN",
+    "episodes": 0,
+    "clips": 0,
+    "evidence_errors": 0,
+    "policy": {
+      "yellow_sec": 3.0,
+      "red_sec": 5.0
+    },
+    "case_status": {
+      "PHONE": "НЕ НАБЛЮДАЕТСЯ",
+      "HAND": "не наблюдается · 0.0 с · футаж, без отдельного таймера тревоги",
+      "LIFT": "не наблюдается · 0.0 с · футаж, без отдельного таймера тревоги",
+      "RAISED": "не наблюдается · 0.0 с · футаж, без отдельного таймера тревоги",
+      "AIM": "не наблюдается · 0.0 с · футаж, без отдельного таймера тревоги · эвристика",
+      "HEAD": "UNKNOWN: обязательная калибровка",
+      "GAZE": "UNKNOWN: обязательная калибровка",
+      "DOWN": "UNKNOWN: требуется центр / читаемые глаза",
+      "SIDE": "UNKNOWN: требуется центр / читаемые глаза",
+      "PRESENCE": "Лиц: 1",
+      "MULTI": "не наблюдается · 0.0 с · 3/5 с",
+      "ALT": "НЕ АКТИВНО: disabled",
+      "COPY": "НЕ АКТИВНО: disabled · буфер не блокируется в dev",
+      "WIN": "НЕ АКТИВНО: disabled",
+      "SHOT": "НЕ АКТИВНО: disabled · не все способы screenshot",
+      "TABS": "Нет браузера в этом режиме. Защита вкладок — --embedded-test",
+      "WINDOWS": "НЕ АКТИВНО в CV/dev"
+    },
+    "calibration": null,
+    "calibration_error": "Не различён поворот головы: Влево",
+    "guard": "disabled",
+    "immediate_phone_conf": 0.55,
+    "gaze_entry_gates": {
+      "LEFT": 0.1,
+      "RIGHT": 0.1,
+      "UP": 0.12,
+      "DOWN": 0.12
+    },
+    "detail_calls": 45,
+    "preview": {
+      "image_size": [
+        842,
+        632
+      ],
+      "window_size": [
+        1280,
+        800
+      ]
+    },
+    "phone_evidence": []
+  },
+  "timings": {
+    "logic": {
+      "n": 120,
+      "mean_ms": 0.09737151667650323,
+      "p50_ms": 0.09455099984734261,
+      "p95_ms": 0.11908300007235084
+    },
+    "ui_render": {
+      "n": 120,
+      "mean_ms": 1.7308363416683885,
+      "p50_ms": 1.6730730001199845,
+      "p95_ms": 2.1662369999830844
+    },
+    "preview_age": {
+      "n": 120,
+      "mean_ms": 17.072118708334,
+      "p50_ms": 16.916237000032197,
+      "p95_ms": 31.05765700001939
+    },
+    "face_scan": {
+      "n": 120,
+      "mean_ms": 1.3586077416694782,
+      "p50_ms": 0.001956000005520764,
+      "p95_ms": 5.562346000033358
+    },
+    "mediapipe": {
+      "n": 120,
+      "mean_ms": 6.57515580833774,
+      "p50_ms": 5.733335999821065,
+      "p95_ms": 10.392166999963592
+    },
+    "head_pose": {
+      "n": 120,
+      "mean_ms": 1.0683233583184422,
+      "p50_ms": 0.8557119999750284,
+      "p95_ms": 2.8118259999700967
+    },
+    "eye_gaze": {
+      "n": 120,
+      "mean_ms": 0.3254314333200152,
+      "p50_ms": 0.3066699998726108,
+      "p95_ms": 0.4867340001055709
+    },
+    "yolo": {
+      "n": 89,
+      "mean_ms": 108.54995480898079,
+      "p50_ms": 78.82451000000401,
+      "p95_ms": 185.7758990001912
+    },
+    "detail_search": {
+      "n": 89,
+      "mean_ms": 49.975201539323635,
+      "p50_ms": 0.0,
+      "p95_ms": 120.70568700005424
+    },
+    "postprocess": {
+      "n": 89,
+      "mean_ms": 0.004766988759206214,
+      "p50_ms": 0.004488999820750905,
+      "p95_ms": 0.006325999947875971
+    },
+    "tracker": {
+      "n": 89,
+      "mean_ms": 0.0294520449325942,
+      "p50_ms": 0.027711000029739807,
+      "p95_ms": 0.04014699993604154
+    }
+  },
+  "limitations": [
+    "No labelled real gaze/head video",
+    "No real desk phone clip",
+    "No physical Windows security test",
+    "Visual PNG inspection unavailable"
+  ]
+}

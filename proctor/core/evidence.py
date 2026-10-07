@@ -99,7 +99,7 @@ class EvidenceRecorder:
                 self.error=str(exc); self.failures+=1; self.retry_at=time.monotonic()+1.
                 if self.writer is not None: self.writer.release(); self.writer=None
         try:
-            self._changes(); self._finish(truncated=bool(self.active))
+            self._changes(); self._finish(truncated=bool(self.active) or time.monotonic()<self.post_until)
         except Exception as exc: self.error=str(exc); self.failures+=1
 
     def stop(self):

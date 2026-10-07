@@ -448,7 +448,7 @@ def main():
         Path(session_dir/"timings.json").write_text(json.dumps(metrics.snapshot(),indent=2),encoding="utf-8")
         res = QWidget()
         layout = QVBoxLayout(res)
-        layout.addWidget(QLabel(f"Тест завершён · индекс: {score}/100"))
+        layout.addWidget(QLabel(f"Тест завершён · предупреждений: {len(store.all())} · эпизодов: {len(store.episode_rows())} · фрагментов: {recorder.clips}"))
         layout.addWidget(QLabel(f"Отчёт: {report}\nСессия: {session_dir}"+("\nОшибка записи: "+writer.error if writer.error else "")))
         button = QPushButton("Выйти")
         button.clicked.connect(app.quit)

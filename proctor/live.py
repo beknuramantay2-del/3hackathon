@@ -89,6 +89,7 @@ def main():
     finished=False
     calibration=None
     calibration_mode=None
+    calibration_error=""
     ever_calibrated=False
     auto_attempted=False
     next_phase=None
@@ -193,7 +194,7 @@ def main():
         for control in (window.phone_threshold,window.gaze_hold,window.down_hold,window.yaw_threshold,window.pitch_threshold):control.setEnabled(False)
 
     def poll():
-        nonlocal last_frame,last_ui,calibration,calibration_mode,next_phase,metrics_at,stage_text,resource_text,ever_calibrated,auto_attempted
+        nonlocal last_frame,last_ui,calibration,calibration_mode,next_phase,metrics_at,stage_text,resource_text,ever_calibrated,auto_attempted,calibration_error
         now=time.monotonic()
         for worker in workers:
             result=worker.output.peek()
@@ -221,13 +222,14 @@ def main():
             window.calibration_running(pose,calibration.remaining(now),calibration.duration,calibration.stage)
             try:
                 if calibration.advance(now):
-                    engine.calib=calibration.base;engine.reset();ever_calibrated=True
+                    engine.calib=calibration.base;engine.reset();ever_calibrated=True;calibration_error=""
                     message='Готово: голова и глаза различают все направления. Требуется проверка реальных сценариев.'
                     window.log(message);window.calibration_finished(message)
                     calibration=None;window.target.hide();QApplication.beep()
             except CalibrationError as exc:
                 engine.calib={};engine.reset();calibration=None
-                message='Экзамен не готов: '+str(exc)+'. Повторите настройку.'
+                calibration_error=str(exc)
+                message='Экзамен не готов: '+calibration_error+'. Повторите настройку.'
                 window.log(message);window.calibration_finished(message);window.target.hide()
         if face.status!="ready" or face.output.peek() is None:
             engine.face.error=face.error or "FaceMesh loading/unavailable"
@@ -390,7 +392,7 @@ def main():
             head=engine.debug.get('head'),gaze=engine.debug.get('gaze'),
             episodes=len(store.episode_rows()),clips=recorder.clips,evidence_errors=recorder.failures,policy=dict(yellow_sec=policy.yellow,red_sec=policy.red),
             case_status={key:window.checklist.item(row,1).text() for key,row in window.rows.items()},
-            calibration=engine.calib.get('mode'),guard=hk.status,
+            calibration=engine.calib.get('mode'),calibration_error=calibration_error,guard=hk.status,
             immediate_phone_conf=max(policy.phone_conf,yolo.conf_phone),
             gaze_entry_gates=engine.debug.get('gaze_entry_gates'),detail_calls=yolo.detail_calls,
             preview=dict(image_size=[window.camera.image_rect.width(),window.camera.image_rect.height()],window_size=[window.width(),window.height()]),
