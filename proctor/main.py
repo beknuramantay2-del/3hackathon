@@ -39,6 +39,8 @@ from proctor.guard.security import verify_password,FULL_GUARD
 from proctor.ui.screens import PreflightScreen,CalibrationView,SidePanel
 from proctor.ui.test_window import TestWindow
 from proctor.report.generator import generate
+from proctor.school.exam import SchoolExam,exam_html
+from proctor.school.database import SchoolError
 
 class UiBus(QObject):
     violation = pyqtSignal(str,object)
@@ -69,7 +71,12 @@ def main():
     args = ap.parse_args()
     # Stable relative paths regardless of current working directory.
     os.chdir(Path(__file__).resolve().parent.parent)
+    school=None
     try:
+        school=SchoolExam.from_environment()
+        if school:
+            path=school.db.path.parent/'launch'/school.spec['id']/'exam.html'
+            path.parent.mkdir(parents=True,exist_ok=True);path.write_text(exam_html(school.spec),encoding='utf8')
         cfg = load_config(args.config,args.profile)
         if not cfg["_test_url"].strip():
             raise ConfigError("Для --embedded-test задайте реальную страницу test.test_url. Заглушка теста отключена")
@@ -80,7 +87,7 @@ def main():
             import ctypes
             if args.no_guard or args.demo or args.video or not FULL_GUARD or not ctypes.windll.shell32.IsUserAnAdmin():
                 raise ConfigError("exam требует Windows/admin, живую камеру и включенную защиту; для демо используйте dev")
-    except (ConfigError,RuntimeError) as e:
+    except (ConfigError,RuntimeError,SchoolError) as e:
         print(e,file=sys.stderr)
         return 2
     try:
@@ -130,6 +137,7 @@ def main():
     session_dir = Path(cfg["store"]["db"]).parent/"sessions"/run_id
     store = Store(str(session_dir/"session.db"),str(session_dir/"shots"),
                   cfg["hash_chain"]["salt_hex"] if cfg["hash_chain"]["enabled"] else "")
+    if school:school.db.bind_run(school.lease,session_dir,'video replay' if args.video else 'camera')
     writer = EventWriter(store)
     pc=cfg.get('policy',{});ec=cfg.get('evidence',{})
     policy=EpisodePolicy(pc.get('yellow_sec',3.),pc.get('red_sec',5.),phone_conf=pc.get('immediate_phone_conf',.55))
@@ -180,7 +188,7 @@ def main():
         try:
             text,ok = QInputDialog.getText(stack,"Выход экзаменатора","Пароль:",QLineEdit.EchoMode.Password)
             ex = cfg["guard"]["examiner"]
-            return bool(ok and text and verify_password(text,ex["salt_hex"],ex["hash_hex"],ex["iterations"]))
+            return bool(ok and text and (school.db.privileged_password(text) if school else verify_password(text,ex["salt_hex"],ex["hash_hex"],ex["iterations"])))
         finally:
             fw.enabled = was_enabled
 
@@ -233,6 +241,7 @@ def main():
                     ("Камера не виртуальная (эвристика)",not camera_check["blocked"])])
         return out
     pre = PreflightScreen(checks)
+    if school:pre.fio.setText(school.spec['name']);pre.fio.setReadOnly(True)
     cal_view = CalibrationView(calibration.duration, external=True)
     stack.addWidget(pre); stack.addWidget(cal_view)
 
@@ -285,13 +294,16 @@ def main():
             return
         engine.reset()
         try:
-            w = TestWindow(emit_violation,lambda ans:finish(),cfg["_test_url"],cfg["_domains"])
+            w = TestWindow(emit_violation,lambda ans:finish(ans),cfg["_test_url"],cfg["_domains"])
         except RuntimeError as e:
             cal_view.failed(str(e))
             return
         window["test"] = w
-        w.panel.debug_on = args.debug
+        w.panel.debug_on = args.debug and not school
         w.panel.feed.itemDoubleClicked.connect(open_evidence)
+        if school:
+            w.panel.states.hide();w.panel.feed.hide();w.panel.hold.hide();w.panel.hold_label.hide()
+            w.panel.set_status('Камера активна. Ответы и записи сохраняются локально.')
         stack.addWidget(w); stack.setCurrentWidget(w)
         state.update(active=True,started=time.monotonic(),status="Тест активен")
         stack.locked = cfg["profile"] == "exam"
@@ -312,6 +324,7 @@ def main():
                 cal_view.failed("Защита клавиш не активирована: "+", ".join(hk.errors))
                 return
             fw.start(); pw.start(); clipboard.start()
+        if school:school.started()
     cal_view.done.connect(calibration_done)
     seen = {w:-1 for w in workers}
     frame_seen = {"seq":-1}
@@ -320,8 +333,10 @@ def main():
     process = psutil.Process()
     process.cpu_percent()
     last_monitor = {"at":0.}
+    deadline_requested=False
 
     def poll():
+        nonlocal deadline_requested
         now = time.monotonic()
         if state["done"]:
             return
@@ -386,6 +401,12 @@ def main():
                     emit_violation("SECOND_MONITOR")
             panel = window["test"].panel
             elapsed = int(now-state["started"])
+            if school:
+                if elapsed>=school.spec['seconds'] and not deadline_requested:
+                    deadline_requested=True
+                    window['test'].view.setEnabled(False)
+                    window['test'].page.runJavaScript('JSON.stringify(collectAnswers())',lambda answers:finish(answers or '{}'))
+                elapsed=max(0,school.spec['seconds']-elapsed)
             panel.timer.setText(f"{elapsed//60:02d}:{elapsed%60:02d}")
             d = engine.debug
             n_faces,n_phones = d.get("n_faces"),d.get("phones")
@@ -403,6 +424,7 @@ def main():
             if writer.error:
                 errors.append("Запись: "+writer.error)
             panel.set_status('Калибровка потеряна: ввод ответов заблокирован. Требуется новая сессия с экзаменатором.' if not ready else " · ".join(errors) if errors else ('ЗЕЛЁНЫЙ','ЖЁЛТЫЙ · проверка','КРАСНЫЙ · проверка экзаменатором')[policy.level]+' · PHONE_AIMED — эвристика')
+            if school and ready:panel.set_status('Камера/запись: обратитесь к экзаменатору' if errors else 'Наблюдение активно. Ответы сохраняются локально.')
         packet = cam.output.peek()
         if packet is not None and packet.seq != frame_seen["seq"]:
             frame_seen["seq"] = packet.seq
@@ -431,9 +453,16 @@ def main():
             if state["active"] and (cfg["profile"] != "exam" or ask_password()):
                 finish()
 
-    def finish():
+    def finish(answers=None):
         if state["done"]:
             return
+        if school and answers is not None:
+            try:school.submit(answers)
+            except SchoolError as exc:
+                if window['test']:
+                    window['test'].panel.set_status(str(exc))
+                    window['test'].page.runJavaScript("document.getElementById('submit').disabled=false")
+                return
         state.update(done=True,active=False,calibrating=False,status="Завершено")
         stack.locked = False
         hk.stop(); fw.stop(); pw.stop(); clipboard.stop()
@@ -443,6 +472,8 @@ def main():
                 worker.wait()
         recorder.submit(policy.close());recorder.stop()
         writer.flush()
+        if school:
+            school.close();app.quit();return
         report,score,_ = generate(store,cfg,cfg["report"]["out"],cam.camera_fps,time.time()-store.t0,state["fio"],trust.get_score(texts.get("trust_labels") or {}))
         import json
         Path(session_dir/"timings.json").write_text(json.dumps(metrics.snapshot(),indent=2),encoding="utf-8")
@@ -481,6 +512,7 @@ def main():
             window["test"].dispose()
         if examiner:
             examiner.stop()
+        if school and not school.closed:school.close()
         store.close()
         lock.unlock()
     app.aboutToQuit.connect(cleanup)
