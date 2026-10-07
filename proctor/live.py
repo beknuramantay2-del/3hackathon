@@ -233,6 +233,7 @@ def main():
         ready=calibration_complete(engine.calib) and calibration is None
         engine.tick(now,directions_enabled=ready)
         engine.debug['calibrated']=ready
+        engine.debug['immediate_phone_conf']=max(policy.phone_conf,yolo.conf_phone)
         timings.add('logic',time.perf_counter()-s)
         conditions=policy.observations(engine,now,ready)
         # Setup is not an exam: absence alerts begin only after the first complete calibration.

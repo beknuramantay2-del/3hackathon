@@ -14,7 +14,7 @@ class MandatoryCalibration:
         self.min_samples = min_samples
         self.stage = 'head'
         self.cal = Calibration(15., min_samples=min_samples, settle=.6)
-        self.head_base = {}; self.base = {}; self.done = False
+        self.head_base = {}; self.base = {}; self.done = False; self.invalid=False
         self.started_at = None
 
     def start(self, now):
@@ -28,7 +28,8 @@ class MandatoryCalibration:
         return max(0., 15.-(now-self.cal.started_at)) + (15. if self.stage == 'head' else 0.)
 
     def feed(self, f):
-        if self.done or f.n_faces != 1 or not f.pose_valid or f.primary_changed:
+        if f.primary_changed:self.invalid=True
+        if self.done or f.n_faces != 1 or not f.pose_valid or self.invalid:
             return False
         if self.stage == 'gaze':
             if not f.gaze_valid or f.left_eye is None or f.right_eye is None:
@@ -60,6 +61,7 @@ class MandatoryCalibration:
                     head_x_threshold=thresholds[0], head_y_threshold=thresholds[1], head_calibrated=True)
 
     def advance(self, now):
+        if self.invalid:raise CalibrationError('Основное лицо сменилось: повторите всю настройку')
         if self.done or now-self.cal.started_at < 15.:
             return False
         if self.stage == 'head':
