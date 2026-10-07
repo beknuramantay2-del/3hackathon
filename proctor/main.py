@@ -16,8 +16,12 @@ from proctor.core.overlay import render_overlay
 from proctor.core.detector_yolo import DetectorYolo
 from proctor.core.face_mesh import FaceMeshThread
 from proctor.core.hands import HandsThread
-from proctor.core.calibration import Calibration,CalibrationError
+from proctor.core.calibration import CalibrationError
+from proctor.core.mandatory_calibration import MandatoryCalibration,calibration_complete
 from proctor.core.rules import RuleEngine
+from proctor.core.episodes import EpisodePolicy
+from proctor.core.evidence import EvidenceRecorder
+from proctor.ui.clip_viewer import ClipViewer
 from proctor.core.events import make_violation,SEVERITY
 from proctor.core.store import Store,EventWriter
 from proctor.core.pipeline import Timings,hardware_profile
@@ -127,9 +131,13 @@ def main():
     store = Store(str(session_dir/"session.db"),str(session_dir/"shots"),
                   cfg["hash_chain"]["salt_hex"] if cfg["hash_chain"]["enabled"] else "")
     writer = EventWriter(store)
+    pc=cfg.get('policy',{});ec=cfg.get('evidence',{})
+    policy=EpisodePolicy(pc.get('yellow_sec',3.),pc.get('red_sec',5.),phone_conf=pc.get('immediate_phone_conf',.55))
+    recorder=EvidenceRecorder(store,session_dir/'clips',fps=ec.get('fps',5),pre=ec.get('pre_sec',2.),post=ec.get('post_sec',2.),segment=ec.get('segment_sec',15.),source='video replay' if args.video else 'camera')
+    cam.subscribe(recorder.push)
     trust = TrustCalculator(cfg["trust_weights"])
     engine = RuleEngine(cfg)
-    calibration = Calibration(cfg["calibration"]["duration_sec"])
+    calibration = MandatoryCalibration()
     metrics = Timings()
     state = dict(active=False,calibrating=False,done=False,started=0.,fio="",status="Подготовка")
     window = {"test":None}
@@ -147,16 +155,23 @@ def main():
             return
         now = time.monotonic()
         event_gap = 5. if vtype in ("CAMERA_LOST","FOCUS_LOST","FORBIDDEN_PROCESS","SECOND_MONITOR") else 1.
-        if now-last_events.get(vtype,-1e9) < event_gap:
+        if not (details or {}).get("ident") and now-last_events.get(vtype,-1e9) < event_gap:
             return
         last_events[vtype] = now
-        duration = engine.debug.get("durations",{}).get(vtype,0.)
+        if not (details or {}).get('ident'):
+            pulse=policy.pulse(vtype,now,min(2,SEVERITY[vtype]));recorder.submit([pulse])
+            details=dict(details or {},ident=pulse['ident'],level=pulse['level'],started=now)
+        duration = (details or {}).get("duration",engine.debug.get("durations",{}).get(vtype,0.))
         v = make_violation(vtype,duration,"",dict(details or {}))
-        shot = cam.latest if cfg["store"]["save_screenshots"] else None
+        if (details or {}).get('ident'):
+            v.severity=details['level'];v.t_start=details['started']+recorder.wall_offset
+        packet=cam.output.peek()
+        shot = packet.frame if cfg["store"]["save_screenshots"] and packet and now-packet.captured_at<.7 else None
         if writer.submit(v,shot):
             trust.apply_violation(v)
             if window["test"]:
-                window["test"].panel.log(f"{time.strftime('%H:%M:%S')} · {vtype} · {duration:.1f}с")
+                window["test"].panel.log(f"{time.strftime('%H:%M:%S')} · {vtype} · {duration:.1f}с",(details or {}).get('level'),(details or {}).get('ident',''))
+                if (details or {}).get('level')==2:QApplication.beep()
     bridge.violation.connect(emit_violation)
 
     def ask_password():
@@ -218,7 +233,7 @@ def main():
                     ("Камера не виртуальная (эвристика)",not camera_check["blocked"])])
         return out
     pre = PreflightScreen(checks)
-    cal_view = CalibrationView(calibration.duration)
+    cal_view = CalibrationView(calibration.duration, external=True)
     stack.addWidget(pre); stack.addWidget(cal_view)
 
     def unlock_monitors():
@@ -229,6 +244,9 @@ def main():
     pre.on_unlock = unlock_monitors
 
     def start_calibration():
+        nonlocal calibration
+        calibration=MandatoryCalibration()
+        engine.calib={}
         pre.poll.stop()
         state["fio"],state["calibrating"] = pre.fio_text,True
         stack.setCurrentWidget(cal_view)
@@ -244,12 +262,22 @@ def main():
         pre.poll.start(1000)
     cal_view.canceled.connect(cancel_calibration)
 
+    def open_evidence(item):
+        ident=item.data(Qt.ItemDataRole.UserRole)
+        if not ident or cfg['profile']=='exam' and not ask_password():return
+        was_enabled=fw.enabled;fw.enabled=False
+        try:
+            clips=store.clips_for(ident)
+            if clips:ClipViewer(clips,session_dir/'clips',stack).exec()
+            elif window['test']:window['test'].panel.set_status('Футаж ещё записывается / недоступен: '+recorder.error)
+        finally:fw.enabled=was_enabled
+
     def calibration_done():
         state["calibrating"] = False
         try:
-            engine.calib = calibration.finish()
-            if engine.calib["unresolved_targets"]:
-                raise CalibrationError("Не удалось измерить позы взгляда: "+", ".join(engine.calib["unresolved_targets"])+". Повторите, двигая только глазами")
+            if not calibration_complete(calibration.base):
+                raise CalibrationError("Обязательная калибровка головы и глаз не завершена")
+            engine.calib = calibration.base
             if not all(good for _,good in checks()):
                 raise CalibrationError("Проверка устройств не пройдена: вернитесь на старт")
         except CalibrationError as e:
@@ -263,6 +291,7 @@ def main():
             return
         window["test"] = w
         w.panel.debug_on = args.debug
+        w.panel.feed.itemDoubleClicked.connect(open_evidence)
         stack.addWidget(w); stack.setCurrentWidget(w)
         state.update(active=True,started=time.monotonic(),status="Тест активен")
         stack.locked = cfg["profile"] == "exam"
@@ -305,12 +334,26 @@ def main():
                 metrics.add(name,elapsed)
             if worker is face:
                 engine.on_face(result)
-                if state["calibrating"] and result.n_faces == 1 and result.pose_valid and result.gaze_valid and now-result.captured_at < .5:
-                    calibration.add(result.yaw,result.pitch,result.iris_h,result.iris_v,now=result.captured_at,left_eye=result.left_eye,right_eye=result.right_eye)
+                if state["calibrating"] and now-result.captured_at < .5:
+                    calibration.feed(result)
             elif worker is yolo:
                 engine.on_yolo(result)
             else:
                 engine.on_hands(result)
+        if state["calibrating"]:
+            phase=calibration.phase(now);stage=calibration.stage
+            instruction='поверните голову' if stage=='head' else 'двигайте только глазами; голова прямо'
+            label={'CENTER':'прямо','LEFT':'влево','RIGHT':'вправо','UP':'вверх','DOWN':'вниз'}[phase]
+            cal_view.title.setText('Обязательная калибровка: '+('голова' if stage=='head' else 'глаза'))
+            cal_view.prompt.setText(instruction+' · '+label)
+            cal_view.counter.setText(f'Осталось {calibration.remaining(now):.1f} с')
+            marker=(stage,phase)
+            if cal_view.last_phase!=marker:
+                cal_view.last_phase=marker;QApplication.beep()
+            try:
+                if calibration.advance(now):calibration_done()
+            except CalibrationError as exc:
+                state['calibrating']=False;engine.calib={};cal_view.failed(str(exc))
         if state["active"]:
             s = time.perf_counter()
             # Disable evidence from a dead/stalled worker; never keep a phone or gaze forever.
@@ -318,8 +361,22 @@ def main():
                 engine.face.error = face.error or face.status
             if yolo.status != "ready":
                 engine.yolo.error = yolo.error or yolo.status
-            for kind in engine.tick(now):
-                emit_violation(kind,engine.debug)
+            ready=calibration_complete(engine.calib)
+            engine.tick(now,directions_enabled=ready)
+            engine.debug['calibrated']=ready
+            engine.debug['immediate_phone_conf']=max(policy.phone_conf,yolo.conf_phone)
+            if not ready:engine.debug.update(head='UNKNOWN',gaze='UNKNOWN')
+            window['test'].view.setEnabled(ready)
+            conditions=policy.observations(engine,now,ready)
+            changes,notices=policy.update(conditions,now,policy.ages(engine,now))
+            recorder.submit(changes)
+            for row in changes:
+                if not row['closed'] and row['level']==0 and row['duration']==0:
+                    window['test'].panel.log('Запись: '+row['kind'],0,row['ident'])
+            for row in notices:emit_violation(row['kind'],dict(row,measurements=engine.debug))
+            engine.debug['conds']=conditions
+            engine.debug['durations']={k:e.duration for k,e in policy.active.items()}
+            engine.debug['warnings_active']=[k for k,e in policy.active.items() if e.level>0]
             metrics.add("logic",time.perf_counter()-s)
             if cam.status != "ready" or cam.output.peek() is None or now-cam.output.peek().captured_at > 1:
                 emit_violation("CAMERA_LOST",{"status":cam.status})
@@ -335,25 +392,23 @@ def main():
             face_status = "UNKNOWN" if n_faces is None else (f"DETECTED ({n_faces})" if n_faces else "LOST")
             phone_status = "UNKNOWN" if n_phones is None else ("DETECTED" if d["conds"]["PHONE_DETECTED"] else ("CANDIDATE" if n_phones else "NOT DETECTED"))
             panel.states.setText(f"HEAD: {d.get('head','UNKNOWN')}\nGAZE: {d.get('gaze','UNKNOWN')}\nFACE: {face_status}\nPHONE: {phone_status}")
-            active = [(r.active_duration(now)/max(r.hold,.01),name,r) for name,r in engine.rules.items()
-                      if d.get("conds",{}).get(name) and name.startswith(("GAZE_","HEAD_"))]
+            active=[e for e in policy.active.values() if e.kind.startswith(('HEAD_','GAZE_'))]
             if active:
-                fraction,name,r = max(active)
-                panel.set_hold(f"{name}: {r.active_duration(now):.1f}/{r.hold:.1f}с",fraction)
-            else:
-                panel.set_hold("Удержание: 0.0 с",0)
+                ep=max(active,key=lambda e:e.duration)
+                panel.set_hold(f'{ep.kind}: {ep.duration:.1f}с · жёлтый {policy.yellow:.0f}/красный {policy.red:.0f}с',ep.duration/policy.red)
+            else:panel.set_hold('Нет активного отвода',0)
             errors = [w.error for w in workers if w.status == "error"]
             if guard_on and hk.status != "active":
                 errors.append("Guard: "+hk.status)
             if writer.error:
                 errors.append("Запись: "+writer.error)
-            panel.set_status(" · ".join(errors) if errors else "Мониторинг активен · PHONE_AIMED — эвристика")
+            panel.set_status('Калибровка потеряна: ввод ответов заблокирован. Требуется новая сессия с экзаменатором.' if not ready else " · ".join(errors) if errors else ('ЗЕЛЁНЫЙ','ЖЁЛТЫЙ · проверка','КРАСНЫЙ · проверка экзаменатором')[policy.level]+' · PHONE_AIMED — эвристика')
         packet = cam.output.peek()
         if packet is not None and packet.seq != frame_seen["seq"]:
             frame_seen["seq"] = packet.seq
             if state["calibrating"] or state["active"]:
                 s = time.perf_counter()
-                vis = render_overlay(packet,engine.face,engine.yolo,engine.hands,cfg["camera"]["mirror_preview"])
+                vis = render_overlay(packet,engine.face,engine.yolo,engine.hands,cfg["camera"]["mirror_preview"],states=engine.debug)
                 if state["calibrating"]:
                     cal_view.preview.setPixmap(SidePanel.pixmap(vis))
                 else:
@@ -386,13 +441,14 @@ def main():
         for worker in [cam]+workers:
             if not worker.stop():
                 worker.wait()
+        recorder.submit(policy.close());recorder.stop()
         writer.flush()
         report,score,_ = generate(store,cfg,cfg["report"]["out"],cam.camera_fps,time.time()-store.t0,state["fio"],trust.get_score(texts.get("trust_labels") or {}))
         import json
         Path(session_dir/"timings.json").write_text(json.dumps(metrics.snapshot(),indent=2),encoding="utf-8")
         res = QWidget()
         layout = QVBoxLayout(res)
-        layout.addWidget(QLabel(f"Тест завершён · индекс: {score}/100"))
+        layout.addWidget(QLabel(f"Тест завершён · предупреждений: {len(store.all())} · эпизодов: {len(store.episode_rows())} · фрагментов: {recorder.clips}"))
         layout.addWidget(QLabel(f"Отчёт: {report}\nСессия: {session_dir}"+("\nОшибка записи: "+writer.error if writer.error else "")))
         button = QPushButton("Выйти")
         button.clicked.connect(app.quit)
@@ -418,6 +474,8 @@ def main():
             if not worker.stop():
                 print(f"Ожидаю завершения {type(worker).__name__}; драйвер/инференс не отвечает")
                 worker.wait()  # no unsafe QThread destruction
+        if recorder.thread.is_alive():
+            recorder.submit(policy.close());recorder.stop()
         writer.stop()
         if window["test"]:
             window["test"].dispose()

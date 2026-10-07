@@ -39,10 +39,11 @@ def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35,states=None):
             draw((b.x1,b.y1,b.x2,b.y2),"person",(240,140,70))
         for b in yolo.candidates:
             if not any(abs(b.x1-p.x1)+abs(b.y1-p.y1)<12 for p in yolo.phones):
-                draw((b.x1,b.y1,b.x2,b.y2),f"candidate {b.conf:.2f}",(40,180,240))
+                strong=b.observed and b.conf >= (states or {}).get('immediate_phone_conf',1.)
+                draw((b.x1,b.y1,b.x2,b.y2),f"{'phone signal' if strong else 'candidate'} {b.conf:.2f}",(80,80,240) if strong else (40,180,240))
         for b in yolo.phones:
             label = ("phone" if b.confirmed else "candidate")+f" #{b.track_id} {b.conf:.2f}"+(" predicted" if not b.observed else " "+b.support_kind if b.supported else "")
-            color = (80,80,240) if b.confirmed and b.observed else (40,180,240) if b.observed else (150,150,150)
+            color = (80,80,240) if b.observed and (b.confirmed or b.conf>=(states or {}).get('immediate_phone_conf',1.)) else (40,180,240) if b.observed else (150,150,150)
             # Extrapolate only the overlay to the displayed frame; never feed this back into rules.
             dt = min(.15,max(0.,packet.captured_at-yolo.captured_at))
             predicted = tuple(x+v*dt for x,v in zip((b.x1,b.y1,b.x2,b.y2),b.velocity))

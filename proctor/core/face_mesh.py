@@ -5,7 +5,7 @@ import numpy as np
 from .worker import LatestWorker
 from .models import FaceResult
 from .camera import CameraThread
-from .geometry import head_pose,eye_gaze,TimeEMA
+from .geometry import head_pose_mesh,eye_gaze,TimeEMA
 from .tracking import iou
 
 class FaceMeshThread(LatestWorker):
@@ -105,23 +105,23 @@ class FaceMeshThread(LatestWorker):
         result.n_faces=len(result.face_boxes)
         result.primary_changed=changed
         s=time.perf_counter()
-        pose=head_pose(pts,w,h)
+        xyz=np.array([(p.x*(rx2-rx1)+rx1,p.y*(ry2-ry1)+ry1,p.z*(rx2-rx1)) for p in lm])
+        pose=head_pose_mesh(xyz)
         if pose is not None:
             result.yaw,result.pitch,result.roll=self.pose_filter.update(pose,now)
             result.pose_valid=True
         else:
-            result.pose_reason="PnP: плохая геометрия/ракурс, превышен reprojection gate"
+            result.pose_reason="Face-local basis: плохая геометрия/крайний ракурс"
         result.timings["head_pose"]=time.perf_counter()-s
         s=time.perf_counter()
-        xyz=np.array([(p.x*(rx2-rx1)+rx1,p.y*(ry2-ry1)+ry1,p.z*(rx2-rx1)) for p in lm])
         left,right,gaze=eye_gaze(pts,xyz)
         result.left_eye=self.left_filter.update(left,now) if left is not None else None
         result.right_eye=self.right_filter.update(right,now) if right is not None else None
         valid=[e for e in (result.left_eye,result.right_eye) if e is not None]
-        if gaze is not None and valid:
+        if gaze is not None and len(valid)==2:
             result.iris_h,result.iris_v=map(float,np.mean(valid,axis=0))
             result.gaze_valid=True
-            result.gaze_reason="Оба глаза" if len(valid)==2 else "Один глаз; ограниченная надёжность"
+            result.gaze_reason="Оба глаза"
         else:
             result.gaze_reason="Зрачки не читаются: моргание/малые глаза/перекрытие или несогласие глаз"
         result.eye_points=[tuple(map(int,pts[i])) for i,e in ((468,right),(473,left)) if e is not None]

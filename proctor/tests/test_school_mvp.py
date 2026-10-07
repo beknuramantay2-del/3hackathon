@@ -109,7 +109,7 @@ def test_school_window_direction_cases_and_controls():
     assert 'Вниз' in w.gaze_card.state.text() and 'Прямо' in w.head_card.state.text()
     assert 'ГЛАЗА: ↓ Вниз' in w.gaze_card.state.text()
     assert len(w.rows)==17 and w.tabs.count()==3
-    assert w.down_hold.value()==3 and w.gaze_hold.value()==2
+    assert w.down_hold.value()==5 and w.gaze_hold.value()==3
     w.show_target('LEFT');app.processEvents()
     assert 0<=w.target.x()<w.width() and 0<=w.target.y()<w.height()
     assert w.camera.width()>300 and w.camera.height()>=220

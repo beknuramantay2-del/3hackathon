@@ -3,8 +3,8 @@ import cv2
 import time
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QPushButton, QLineEdit, QListWidget, QProgressBar, QApplication, QGridLayout)
-from PyQt6.QtGui import QImage, QPixmap
+                             QPushButton, QLineEdit, QListWidget, QListWidgetItem, QProgressBar, QApplication, QGridLayout)
+from PyQt6.QtGui import QImage, QPixmap, QColor
 from proctor.core.strings import load_strings
 
 T = load_strings()
@@ -90,10 +90,11 @@ class CalibrationView(QWidget):
     prompts = ("Смотрите прямо. Голова неподвижна", "Глазами влево. Голова прямо",
                "Глазами вправо. Голова прямо", "Глазами вверх. Голова прямо", "Глазами вниз. Голова прямо")
 
-    def __init__(self, seconds=20.0):
+    def __init__(self, seconds=20.0, external=False):
         super().__init__()
         self.setObjectName("root")
         self.seconds = seconds
+        self.external = external
         self.started_at = 0.
         self.last_phase = -1
         lay = QVBoxLayout(self)
@@ -134,10 +135,12 @@ class CalibrationView(QWidget):
         self.step()
 
     def failed(self, text):
+        self.t.stop()
         self.message.setText(text)
         self.retry.setVisible(True)
 
     def step(self):
+        if self.external:return  # worker-validated mandatory workflow owns completion
         elapsed = time.monotonic()-self.started_at
         phase = min(4,int(elapsed/(self.seconds/5)))
         if phase != self.last_phase:
@@ -222,8 +225,10 @@ class SidePanel(QWidget):
     def set_status(self,text):
         self.status.setText(text)
 
-    def log(self,text):
-        self.feed.insertItem(0,text)
+    def log(self,text,level=None,episode_id=''):
+        item=QListWidgetItem(text);item.setData(Qt.ItemDataRole.UserRole,episode_id)
+        if level is not None:item.setForeground(QColor(('#91cdaa','#f4c36f','#ff8c8c')[min(2,max(0,level))]))
+        self.feed.insertItem(0,item)
         while self.feed.count() > 100:
             self.feed.takeItem(self.feed.count()-1)
 
