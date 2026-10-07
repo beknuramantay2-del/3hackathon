@@ -24,6 +24,7 @@ def fill(widget,rows):
     widget.setRowCount(len(rows))
     for i,row in enumerate(rows):
         for j,val in enumerate(row):widget.setItem(i,j,QTableWidgetItem(str(val)))
+    widget.resizeRowsToContents()
 
 class AccountDialog(QDialog):
     def __init__(self,parent=None,roles=False):
@@ -76,7 +77,8 @@ class Inspector(QDialog):
                 p=Path(data['events'][0]['screenshot']).resolve();root=(Path(self.directory)/'shots').resolve()
                 if p.is_relative_to(root) and p.is_file():self.image.setPixmap(QPixmap(str(p)).scaled(640,300,Qt.AspectRatioMode.KeepAspectRatio))
             self.info.setText(f"Эпизодов в окне: {len(self.rows)} · красных: {sum(e['level']==2 for e in self.rows)} · жёлтых: {sum(e['level']==1 for e in self.rows)} · готовых фрагментов: {len(data['clips'])}. Данные обновляются раз в 2 с.")
-        except (SchoolError,OSError,sqlite_error()) as exc:self.info.setText(str(exc))
+        except (SchoolError,OSError,sqlite_error()) as exc:
+            self.rows=[];self.episodes.setRowCount(0);self.image.clear();self.info.setText(str(exc))
     def play(self):
         try:self.db.actor(self.token,('admin','examiner'))
         except SchoolError as exc:self.info.setText(str(exc));return
@@ -139,7 +141,7 @@ class Hub(QWidget):
         if self.actor['role']=='student':
             self.consent=QCheckBox('Согласен на локальную запись камеры и эпизодов во время экзамена');tl.addWidget(self.consent)
         self.tabs.addTab(tests_page,'Тесты')
-        attempt_page=QWidget();al=QVBoxLayout(attempt_page);self.attempts_table=table(['Ученик','Тест','Статус','Правильных / всего','Источник']+(['Жёлтых','Красных'] if self.actor['role']!='student' else []));al.addWidget(self.attempts_table)
+        attempt_page=QWidget();al=QVBoxLayout(attempt_page);self.attempts_table=table(['Ученик','Тест','Статус','Баллы','Источник']+(['Жёлтых','Красных'] if self.actor['role']!='student' else []));al.addWidget(self.attempts_table)
         if self.actor['role']!='student':
             inspect=QPushButton('Открыть события и футаж');inspect.clicked.connect(self.inspect);al.addWidget(inspect)
             interrupted=QPushButton('Закрыть зависшую попытку');interrupted.setObjectName('secondary');interrupted.clicked.connect(self.interrupt);al.addWidget(interrupted)
@@ -201,7 +203,7 @@ class Hub(QWidget):
             self.attempt_id,self.lease=self.db.new_attempt(self.token,self.test_rows[n]['id'],self.consent.isChecked())
             from .exam import exam_html
             config=yaml.safe_load(Path('proctor/config.yaml').read_text());config['profile']='dev' if self.preview else 'exam'
-            config['guard']['examiner']=self.db.guard_credentials();config['store']['db']=str(self.db.path.parent/'session.db')
+            config['guard']['examiner']=self.db.guard_credentials();config['guard']['process_mode']='log' if self.preview else 'close';config['store']['db']=str(self.db.path.parent/'session.db')
             directory=self.db.path.parent/'launch'/self.attempt_id;directory.mkdir(parents=True,exist_ok=True)
             # Child fills the real HTML from its one-use attempt snapshot after claiming the lease.
             config['test']['test_url']=str(directory/'exam.html');config['hash_chain']['salt_hex']=''

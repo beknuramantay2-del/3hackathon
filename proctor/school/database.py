@@ -111,7 +111,9 @@ class SchoolDB:
             if not target:raise SchoolError('Пользователь не найден')
             if not active and (ident==actor['id'] or target['role']=='admin' and self.con.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]<=1):raise SchoolError('Нельзя отключить себя или последнего администратора')
             self.con.execute('UPDATE users SET active=? WHERE id=?',(int(bool(active)),ident))
-            if not active:self.con.execute('DELETE FROM sessions WHERE user_id=?',(ident,))
+            if not active:
+                self.con.execute('DELETE FROM sessions WHERE user_id=?',(ident,))
+                self.con.execute("UPDATE attempts SET status='interrupted',ended=? WHERE user_id=? AND status IN ('preparing','calibrating','running')",(time.time(),ident))
 
     def create_test(self,token,title,seconds,questions):
         with self.tx():
