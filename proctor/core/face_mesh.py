@@ -44,7 +44,7 @@ class FaceMeshThread(LatestWorker):
         if not hasattr(mp, "solutions"):
             raise RuntimeError("Нужен MediaPipe 0.10.14–0.10.21 / Python 3.10–3.11")
         self.detector = mp.solutions.face_detection.FaceDetection(
-            model_selection=0, min_detection_confidence=self.detection_conf
+            model_selection=1, min_detection_confidence=self.detection_conf
         )
         self.mesh = mp.solutions.face_mesh.FaceMesh(
             max_num_faces=1,

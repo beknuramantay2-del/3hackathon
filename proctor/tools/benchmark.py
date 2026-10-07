@@ -70,6 +70,8 @@ def main():
         offline=True,
         phone_class=yc["phone_class"],
         person_class=yc["person_class"],
+        detail_search=yc.get("detail_search", True),
+        desk_search=yc.get("desk_search", True),
     )
     face = FaceMeshThread(
         fc["max_faces"],
@@ -83,6 +85,7 @@ def main():
         if fc.get("hands_enabled", True)
         else None
     )
+    yolo.hand_provider = hands.output.peek if hands else None
     workers = [yolo, face] + ([hands] if hands else [])
     for w in workers:
         cam.subscribe(w.push)
@@ -149,7 +152,7 @@ def main():
                 continue
             s = time.perf_counter()
 
-            for kind in eng.tick(now):
+            for kind in eng.tick(now, directions_enabled=False):
                 events[kind] = events.get(kind, 0) + 1
             timings.add("logic", time.perf_counter() - s)
             ages = [

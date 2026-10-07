@@ -72,9 +72,11 @@ class AdaptiveBudget:
     ewma: float = 0.0
     observations: int = 0
     ceiling: float = field(init=False)
+    image_ceiling: int = field(init=False)
 
     def __post_init__(self):
         self.ceiling = self.target_fps
+        self.image_ceiling = self.imgsz
 
     def observe(self, seconds):
         self.ewma = seconds if not self.ewma else 0.9 * self.ewma + 0.1 * seconds
@@ -89,13 +91,22 @@ class AdaptiveBudget:
                 self.imgsz = max(self.min_imgsz, self.imgsz - 32)
         elif self.ewma < 0.5 / self.target_fps:
             self.target_fps = min(self.ceiling, self.target_fps + 1)
+            if self.target_fps == self.ceiling and self.observations % 60 == 0:
+                self.imgsz = min(self.image_ceiling, self.imgsz + 32)
 
 
 def hardware_profile(mode="auto"):
     import os
 
-    cores = os.cpu_count() or 2
-    weak = mode == "weak" or (mode == "auto" and cores <= 4)
+    import psutil
+
+    process = psutil.Process()
+    try:
+        cores = len(process.cpu_affinity())
+    except (AttributeError, psutil.Error):
+        cores = os.cpu_count() or 2
+    ram = psutil.virtual_memory().total
+    weak = mode == "weak" or mode == "auto" and (cores <= 4 or ram <= 8.5 * 1024**3)
 
     return dict(
         width=640,

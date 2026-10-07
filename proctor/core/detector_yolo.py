@@ -32,7 +32,9 @@ class DetectorYolo(LatestWorker):
         self.PHONE, self.PERSON = phone_class, person_class
         self.device, self.threads, self.offline = device, threads, offline
         self.budget.imgsz = imgsz
-        self.budget.min_imgsz = min(imgsz, 416)
+        self.budget.image_ceiling = imgsz
+        self.budget.min_imgsz = min(imgsz, 320)
+        self.detail_imgsz = min(640, imgsz + 128)
         self.tracker = LiteTracker(strong=conf_phone, min_hits=2, ttl=0.65)
         self.model = None
         self.requested_confidence = conf_phone
@@ -60,6 +62,7 @@ class DetectorYolo(LatestWorker):
         from ultralytics import YOLO
 
         self.model = YOLO(self.model_name)
+        self.validate_classes(self.model.names)
         import numpy as np
 
         self.model.predict(
@@ -69,6 +72,28 @@ class DetectorYolo(LatestWorker):
             device=self.device,
             verbose=False,
         )
+
+    def validate_classes(self, names):
+        labels = names if isinstance(names, dict) else dict(enumerate(names))
+        normalize = lambda text: str(text).strip().casefold().replace("_", " ")
+        phone = normalize(labels.get(self.PHONE, ""))
+        person = normalize(labels.get(self.PERSON, ""))
+        if phone not in (
+            "cell phone",
+            "cellphone",
+            "phone",
+            "smartphone",
+            "mobile phone",
+            "телефон",
+            "смартфон",
+        ):
+            raise ValueError(
+                "Модель не содержит настроенный класс телефона; проверьте веса и phone_class"
+            )
+        if person not in ("person", "human", "человек"):
+            raise ValueError(
+                "Модель не содержит настроенный класс person; проверьте person_class"
+            )
 
     def _infer(self, image, size, classes, offset=(0, 0)):
         result = self.model.predict(
@@ -174,7 +199,7 @@ class DetectorYolo(LatestWorker):
             roi, origin = self._detail_roi(packet.frame, phones, packet.captured_at)
             if roi.size:
                 s = time.perf_counter()
-                detail_size = min(640, self.budget.imgsz + 128)
+                detail_size = self.detail_imgsz
                 detail, _ = self._infer(roi, detail_size, [self.PHONE], origin)
                 self.detail_calls += 1
                 detail_time = time.perf_counter() - s

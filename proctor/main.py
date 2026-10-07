@@ -42,12 +42,13 @@ from proctor.core.strings import load_strings
 from proctor.core.trust_score import TrustCalculator
 from proctor.core.examiner_server import ExaminerServer
 from proctor.core.preflight import check_camera
+from proctor.core.session_health import cv_health
 from proctor.guard.hotkeys import HotkeyGuard
 from proctor.guard.focus import FocusWatch
 from proctor.guard.processes import ProcWatch
 from proctor.guard.clipboard import ClipboardGuard
 from proctor.guard.displays import monitor_count
-from proctor.guard.security import verify_password, FULL_GUARD
+from proctor.guard.security import verify_password, FULL_GUARD, guard_health
 from proctor.ui.screens import PreflightScreen, CalibrationView, SidePanel
 from proctor.ui.monitor_window import DIRECTIONS, ARROWS
 from proctor.ui.test_window import TestWindow
@@ -356,7 +357,10 @@ def main():
         cfg["guard"]["process_check_sec"],
         mode="log" if args.demo else cfg["guard"]["process_mode"],
         parent=app,
+        enforcing=False,
     )
+    if guard_on and cfg["profile"] == "exam":
+        pw.start()
     pw.found.connect(
         lambda name: emit_violation("FORBIDDEN_PROCESS", {"process": name})
     )
@@ -425,6 +429,16 @@ def main():
                 ("Камера не виртуальная (эвристика)", not camera_check["blocked"]),
             ]
         )
+        if cfg["profile"] == "exam":
+            out.append(
+                (
+                    "Запрещённые программы закрыты: "
+                    + (", ".join(pw.blocking) or "нет"),
+                    pw.status == "active"
+                    and not pw.blocking
+                    and time.monotonic() - pw.checked_at <= max(3.0, pw.interval * 2),
+                )
+            )
         return out
 
     pre = PreflightScreen(checks)
@@ -536,6 +550,7 @@ def main():
         except RuntimeError as e:
             cal_view.failed(str(e))
             return
+        w.view.setEnabled(False)
         window["test"] = w
         w.panel.debug_on = args.debug and not school
         w.panel.feed.itemDoubleClicked.connect(open_evidence)
@@ -573,7 +588,9 @@ def main():
                 )
                 return
             fw.start()
-            pw.start()
+            pw.enforcing = True
+            if not pw.isRunning():
+                pw.start()
             clipboard.start()
         if school:
             school.started()
@@ -681,7 +698,17 @@ def main():
             engine.debug.update(
                 head=engine.debug["head_display"], gaze=engine.debug["gaze_display"]
             )
-            window["test"].view.setEnabled(ready)
+            protected, guard_errors = guard_health(
+                hk, fw, pw, clipboard, now, required=cfg["profile"] == "exam"
+            )
+            cv_ok, cv_errors = cv_health(
+                cam, (("Лицо", face), ("Телефон", yolo)), cam.output.peek(), now
+            )
+            window["test"].view.setEnabled(
+                ready and protected and cv_ok and not deadline_requested
+            )
+            if not protected:
+                emit_violation("GUARD_LOST", {"errors": guard_errors})
             conditions = policy.observations(engine, now, ready)
             changes, notices = policy.update(conditions, now, policy.ages(engine, now))
             recorder.submit(changes)
@@ -758,7 +785,11 @@ def main():
                 )
             else:
                 panel.set_hold("Нет активного отвода", 0)
-            errors = [w.error for w in workers if w.status == "error"]
+            errors = (
+                [w.error for w in workers if w.status == "error"]
+                + guard_errors
+                + cv_errors
+            )
             if guard_on and hk.status != "active":
                 errors.append("Guard: " + hk.status)
             if writer.error:
@@ -823,10 +854,18 @@ def main():
                                     )
                                 )
                             ),
-                            level=policy.level,
+                            level=max(
+                                policy.level,
+                                2 if state["active"] and not protected else 0,
+                            ),
                             calibrated=calibration_complete(engine.calib),
                             phase="Экзамен" if state["active"] else "Калибровка",
-                            error=publisher.error,
+                            error=(
+                                " · ".join([publisher.error] + errors)
+                                if state["active"]
+                                else publisher.error
+                            ),
+                            protection_ready=protected if state["active"] else False,
                         ),
                     )
                 metrics.add("ui_render", time.perf_counter() - s)
@@ -856,6 +895,32 @@ def main():
     def finish(answers=None):
         if state["done"]:
             return
+        if answers is not None and state["active"] and not deadline_requested:
+            protected, guard_errors = guard_health(
+                hk,
+                fw,
+                pw,
+                clipboard,
+                time.monotonic(),
+                required=cfg["profile"] == "exam",
+            )
+            cv_ok, cv_errors = cv_health(
+                cam,
+                (("Лицо", face), ("Телефон", yolo)),
+                cam.output.peek(),
+                time.monotonic(),
+            )
+            if not calibration_complete(engine.calib) or not protected or not cv_ok:
+                window["test"].panel.set_status(
+                    "Отправка временно недоступна: "
+                    + " · ".join(
+                        guard_errors + cv_errors or ["нужна полная калибровка"]
+                    )
+                )
+                window["test"].page.runJavaScript(
+                    "document.getElementById('submit').disabled=false"
+                )
+                return
         if school and answers is not None:
             try:
                 school.submit(answers)

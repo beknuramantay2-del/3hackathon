@@ -49,6 +49,7 @@ trust_labels:
   MULTI_FACE: второе лицо
   HOTKEY_BLOCKED: горячие клавиши
   FOCUS_LOST: потеря фокуса
+  GUARD_LOST: защита экзамена недоступна
   SECOND_MONITOR: второй монитор
   TAB_SWITCH: переключение вкладок
   NAV_BLOCKED: чужой домен

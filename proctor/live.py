@@ -26,7 +26,7 @@ from proctor.guard.hotkeys import HotkeyGuard
 from proctor.guard.focus import FocusWatch
 from proctor.guard.processes import ProcWatch
 from proctor.guard.clipboard import ClipboardGuard
-from proctor.guard.security import FULL_GUARD, verify_password
+from proctor.guard.security import FULL_GUARD, verify_password, guard_health
 
 
 class Signals(QObject):
@@ -557,9 +557,12 @@ def main():
             window.gaze_card.note.show()
         seconds = int(now - started)
         window.session_clock.setText(f"{seconds//60:02}:{seconds%60:02}")
-        guard_workers = (
-            guard_on and hk.status == "active" and fw.isRunning() and pw.isRunning()
+        protection_ready, protection_errors = guard_health(
+            hk, fw, pw, clipboard, now, required=guard_on
         )
+        guard_workers = guard_on and protection_ready
+        if guard_on and not protection_ready:
+            event("GUARD_LOST", {"errors": protection_errors})
         window.mode_label.setText(
             "Режим защиты"
             if guard_workers
