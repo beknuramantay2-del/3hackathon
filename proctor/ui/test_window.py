@@ -6,6 +6,7 @@ if QCoreApplication.instance() is None:
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QApplication
 from .screens import SidePanel, T
+from .browser_keys import BrowserKeyFilter
 
 
 class Bridge(QObject):
@@ -74,6 +75,8 @@ class TestWindow(QWidget):
             self.view = QWebEngineView()
             self.page = Page(self.profile, self.view)
             self.view.setPage(self.page)
+            self.key_filter = BrowserKeyFilter(self.view, on_violation)
+            QApplication.instance().installEventFilter(self.key_filter)
             self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
             self.page.settings().setAttribute(
                 QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False
@@ -95,6 +98,7 @@ class TestWindow(QWidget):
 
     def dispose(self):
 
+        QApplication.instance().removeEventFilter(self.key_filter)
         self.page.setWebChannel(None)
         self.page.deleteLater()
         self.view.deleteLater()

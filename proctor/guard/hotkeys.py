@@ -1,5 +1,17 @@
 from .security import FULL_GUARD, OS
 
+REQUIRED_KEYS = (
+    "alt+tab",
+    "alt+shift+tab",
+    "ctrl+c",
+    "ctrl+v",
+    "left windows",
+    "right windows",
+    "print screen",
+    "ctrl+tab",
+    "ctrl+shift+tab",
+)
+
 
 class HotkeyGuard:
     def __init__(
@@ -10,7 +22,7 @@ class HotkeyGuard:
         on_exit=None,
         enabled=True,
     ):
-        self.hotkeys = hotkeys
+        self.hotkeys = list(dict.fromkeys([*hotkeys, *REQUIRED_KEYS]))
         self.emergency = emergency
         self.on_block = on_block
         self.on_exit = on_exit
@@ -25,8 +37,7 @@ class HotkeyGuard:
         if self.monitor_only:
             print("Мониторинг (не блокирует): клавиши только логируются")
             return False
-        self.start()
-        return True
+        return self.start()
 
     def start(self):
         if not self.enabled:
@@ -78,3 +89,4 @@ class HotkeyGuard:
                 self.kb.unhook_all()
         except Exception:
             pass
+        self.status = "disabled"

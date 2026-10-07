@@ -35,6 +35,7 @@ SEVERITY = {
     "CAMERA_COVERED": 2,
     "FORBIDDEN_PROCESS": 2,
     "FOCUS_LOST": 2,
+    "GUARD_LOST": 2,
     "HOTKEY_BLOCKED": 1,
     "TAB_SWITCH": 1,
     "COPY_ATTEMPT": 1,

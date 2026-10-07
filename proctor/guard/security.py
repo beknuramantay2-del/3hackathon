@@ -7,6 +7,7 @@ if OS == "Windows":
     try:
         import keyboard
         import ctypes
+        import win32gui
     except ImportError as e:
         FULL_GUARD = False
         print(f"[guard] Windows, но нет зависимостей ({e}). Режим мониторинга.")
@@ -20,7 +21,7 @@ else:
 
 def describe() -> str:
     if FULL_GUARD:
-        return "full (Windows, блокировка активна)"
+        return "Windows: зависимости доступны; активация проверяется при запуске"
     return f"monitor-only ({OS}, только логирование попыток)"
 
 
@@ -39,3 +40,27 @@ def verify_password(password, salt_hex, hash_hex, iterations):
         return hmac.compare_digest(digest, bytes.fromhex(hash_hex))
     except (ValueError, TypeError):
         return False
+
+
+def guard_health(hotkeys, focus, processes, clipboard, now, required=True):
+    if not required:
+        return True, []
+    errors = []
+    if hotkeys.status != "active":
+        errors.append("Клавиатурная защита: " + hotkeys.status)
+    if (
+        not focus.enabled
+        or focus.status != "active"
+        or not focus.focus_ok
+        or now - focus.checked_at > 1.0
+    ):
+        errors.append("Фокус экзамена не защищён")
+    if processes.status != "active" or now - processes.checked_at > max(
+        3.0, processes.interval * 2
+    ):
+        errors.append("Проверка процессов не активна")
+    if processes.blocking:
+        errors.append("Запрещённые программы: " + ", ".join(processes.blocking))
+    if not clipboard._active:
+        errors.append("Защита буфера не активна")
+    return not errors, errors

@@ -10,18 +10,23 @@ sys.path.insert(
 
 from proctor.core.config import load_config, ConfigError
 from proctor.core.rules import RuleEngine
-from proctor.core.models import FaceResult, YoloResult, Box
-from proctor.core.calibration import Calibration
 
 TOL = 0.5
 
 
-def run(video, cfg, calibration_mode="five"):
+def run(video, cfg, calibration_mode="mandatory", timeline_out=None):
+    if calibration_mode not in ("mandatory", "five"):
+        raise ValueError("Replay требует полную раздельную калибровку головы и глаз")
     import cv2
     from proctor.core.pipeline import FramePacket
     from proctor.core.face_mesh import FaceMeshThread
     from proctor.core.detector_yolo import DetectorYolo
     from proctor.core.hands import HandsThread
+    from proctor.core.mandatory_calibration import (
+        MandatoryCalibration,
+        calibration_complete,
+    )
+    from proctor.core.episodes import EpisodePolicy
 
     cap = cv2.VideoCapture(video)
     if not cap.isOpened():
@@ -37,6 +42,8 @@ def run(video, cfg, calibration_mode="five"):
         adaptive=False,
         phone_class=yc["phone_class"],
         person_class=yc["person_class"],
+        detail_search=yc.get("detail_search", True),
+        desk_search=yc.get("desk_search", True),
     )
     face = FaceMeshThread(
         fc["max_faces"],
@@ -44,74 +51,133 @@ def run(video, cfg, calibration_mode="five"):
         min_detection_confidence=fc["min_detection_confidence"],
         min_tracking_confidence=fc["min_tracking_confidence"],
     )
-    latest = {"yolo": None}
-    hands = (
-        HandsThread(lambda: latest["yolo"]) if fc.get("hands_enabled", True) else None
-    )
+    hands = HandsThread(yolo.output.peek) if fc.get("hands_enabled", True) else None
+    yolo.hand_provider = hands.output.peek if hands else None
     workers = [yolo, face] + ([hands] if hands else [])
     eng = RuleEngine(cfg, {})
-    seconds = (
-        cfg["calibration"]["duration_sec"]
-        if calibration_mode == "five"
-        else (5.0 if calibration_mode == "center" else 0.0)
+    calibration = MandatoryCalibration()
+    pc = cfg.get("policy", {})
+    policy = EpisodePolicy(
+        pc.get("yellow_sec", 3.0),
+        pc.get("red_sec", 5.0),
+        phone_conf=pc.get("immediate_phone_conf", 0.55),
     )
-    calib = Calibration(seconds or 20.0)
     base = time.monotonic()
-    calib.start(base)
+    calibration.start(base)
     next_yolo = next_face = next_hands = 0.0
-    calibrated = calibration_mode == "none"
-    fired, i = [], 0
+    fired = []
+    by_episode = {}
+    i = 0
     try:
-        for w in workers:
-            w.setup()
+        for worker in workers:
+            worker.setup()
         while True:
-            ok, fr = cap.read()
+            ok, frame = cap.read()
             if not ok:
                 break
             t = i / fps
-            packet = FramePacket(i, base + t, fr, t)
+            now = base + t
+            packet = FramePacket(i, now, frame, t)
             i += 1
+            sampled = False
             if t >= next_yolo:
-                latest["yolo"] = yolo.process(packet)
-                eng.on_yolo(latest["yolo"])
+                r = yolo.process(packet)
+                yolo.output.put(r)
+                eng.on_yolo(r)
                 next_yolo = t + 1 / yc["target_fps"]
             if t >= next_face:
-                f = face.process(packet)
-                eng.on_face(f)
+                result = face.process(packet)
+                eng.on_face(result)
+                sampled = True
                 next_face = t + 1 / fc.get("target_fps", 15)
-                if (
-                    not calibrated
-                    and t < seconds
-                    and f.n_faces == 1
-                    and f.pose_valid
-                    and f.gaze_valid
-                ):
-                    if calibration_mode == "five":
-                        calib.add(f.yaw, f.pitch, f.iris_h, f.iris_v, now=base + t)
-                    elif t >= 0.7:
-                        calib.add(f.yaw, f.pitch, f.iris_h, f.iris_v, pose="CENTER")
+                if not calibration.done:
+                    calibration.feed(result)
+                    eng.preview_base = calibration.preview()
             if hands and t >= next_hands:
-                eng.on_hands(hands.process(packet))
+                result = hands.process(packet)
+                hands.output.put(result)
+                eng.on_hands(result)
                 next_hands = t + 1 / fc.get("hands_fps", 5)
-            if not calibrated and t >= seconds:
-                eng.calib = calib.finish(center_only=calibration_mode == "center")
-                if calibration_mode == "five" and eng.calib["unresolved_targets"]:
-                    raise ValueError(
-                        "Не измерены позы калибровки: "
-                        + str(eng.calib["unresolved_targets"])
-                    )
+            if not calibration.done and calibration.advance(now):
+                eng.calib = calibration.base
                 eng.reset()
-                calibrated = True
-            if calibrated:
-                for kind in eng.tick(base + t):
-                    fired.append({"type": kind, "t": round(t, 2)})
-        if not calibrated:
-            raise ValueError("Видео короче калибровки или калибровка не пройдена")
+            ready = calibration_complete(eng.calib)
+            eng.tick(now, directions_enabled=ready)
+            if not ready:
+                continue
+            conditions = policy.observations(eng, now, ready)
+            _, notices = policy.update(conditions, now, policy.ages(eng, now))
+            for notice in notices:
+                ident = notice["ident"]
+                if ident not in by_episode:
+                    row = dict(
+                        type=notice["kind"],
+                        t=round(t, 3),
+                        level=notice["level"],
+                        episode_id=ident,
+                    )
+                    by_episode[ident] = row
+                    fired.append(row)
+                else:
+                    by_episode[ident]["level"] = notice["level"]
+                by_episode[ident]["yellow_at" if notice["level"] == 1 else "red_at"] = (
+                    round(t, 3)
+                )
+            if sampled and timeline_out is not None:
+                d = eng.debug
+                timeline_out.append(
+                    dict(
+                        t=round(t, 3),
+                        head=d.get("head", "UNKNOWN"),
+                        gaze=d.get("gaze", "UNKNOWN"),
+                        faces=d.get("n_faces"),
+                        phone=bool(conditions.get("PHONE_DETECTED")),
+                        pose_valid=eng.face.pose_valid,
+                        gaze_valid=eng.face.gaze_valid,
+                    )
+                )
+        if not calibration_complete(eng.calib):
+            raise ValueError(
+                "Видео не прошло обязательные 30 с раздельной настройки головы/глаз"
+            )
     finally:
         cap.release()
-        for w in workers:
-            w.teardown()
+        for worker in workers:
+            worker.teardown()
     return fired
+
+
+def direction_metrics(timeline, segments):
+    allowed = {"CENTER", "LEFT", "RIGHT", "UP", "DOWN"}
+    out = {}
+    for channel in ("head", "gaze"):
+        rows = []
+        for segment in segments:
+            if channel not in segment:
+                continue
+            expected = segment[channel]
+            if expected not in allowed:
+                raise ValueError("Неверная метка направления")
+            samples = [
+                row
+                for row in timeline
+                if segment["t_start"] <= row["t"] < segment["t_end"]
+            ]
+            rows.append(
+                dict(
+                    expected=expected,
+                    samples=len(samples),
+                    correct=sum(row[channel] == expected for row in samples),
+                    unknown=sum(row[channel] == "UNKNOWN" for row in samples),
+                )
+            )
+        total = sum(r["samples"] for r in rows)
+        out[channel] = dict(
+            segments=rows,
+            total_samples=total,
+            correct_fraction=sum(r["correct"] for r in rows) / total if total else None,
+        )
+    return out
 
 
 def match(fired, gt):
@@ -169,17 +235,32 @@ def main():
     ap.add_argument("--output", required=True)
     ap.add_argument("--config", default=None)
     ap.add_argument("--profile", default="dev", choices=("dev", "exam"))
-    ap.add_argument("--calibration", choices=("five", "center", "none"), default="five")
+    ap.add_argument("--calibration", choices=("mandatory", "five"), default="mandatory")
     a = ap.parse_args()
     try:
         cfg = load_config(a.config, a.profile)
     except ConfigError as e:
         raise SystemExit(str(e))
     gt = json.load(open(a.gt, encoding="utf-8"))
-    fired = run(a.video, cfg, a.calibration)
-    metrics = match(fired, gt)
+    timeline = []
+    fired = run(a.video, cfg, a.calibration, timeline)
+    segments = gt.get("segments", []) if isinstance(gt, dict) else []
+    events = gt.get("events", []) if isinstance(gt, dict) else gt
+    metrics = match(fired, events)
+    directions = direction_metrics(timeline, segments)
     json.dump(
-        {"detections": fired, "metrics": metrics, "calibration": a.calibration},
+        {
+            "detections": fired,
+            "metrics": metrics,
+            "direction_metrics": directions,
+            "timeline": timeline,
+            "calibration": "mandatory 15+15s",
+            "limitations": [
+                "Offline deterministic replay, not realtime latency",
+                "Accuracy needs independently labelled target-camera video",
+                "OS guards are not exercised by video replay",
+            ],
+        },
         open(a.output, "w", encoding="utf-8"),
         ensure_ascii=False,
         indent=1,
