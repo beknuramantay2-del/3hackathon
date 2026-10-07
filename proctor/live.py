@@ -110,6 +110,10 @@ def main():
         if not episode_id and now-last_events.get(kind,-1e6)<5:
             return
         last_events[kind]=now
+        if not episode_id:
+            pulse=policy.pulse(kind,now,min(2,SEVERITY[kind]));recorder.submit([pulse])
+            episode_id=pulse['ident'];level=pulse['level']
+            details=dict(details or engine.debug,started=now)
         duration=(details or {}).get('duration',engine.debug.get('durations',{}).get(kind,0.))
         # No meaningless trust/accuracy number; every event stores the actual measurement and calibration state.
         data=dict(details or engine.debug)
@@ -240,7 +244,7 @@ def main():
         # Setup is not an exam: absence alerts begin only after the first complete calibration.
         for key in ('NO_FACE','MULTI_FACE','CAMERA_COVERED'):
             conditions[key]=conditions.get(key,False) and ever_calibrated and calibration is None
-        changes,notices=policy.update(conditions,now)
+        changes,notices=policy.update(conditions,now,policy.ages(engine,now))
         recorder.submit(changes)
         for row in changes:
             if not row['closed'] and row['level']==0 and row['duration']==0:

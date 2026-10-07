@@ -158,6 +158,9 @@ def main():
         if not (details or {}).get("ident") and now-last_events.get(vtype,-1e9) < event_gap:
             return
         last_events[vtype] = now
+        if not (details or {}).get('ident'):
+            pulse=policy.pulse(vtype,now,min(2,SEVERITY[vtype]));recorder.submit([pulse])
+            details=dict(details or {},ident=pulse['ident'],level=pulse['level'],started=now)
         duration = (details or {}).get("duration",engine.debug.get("durations",{}).get(vtype,0.))
         v = make_violation(vtype,duration,"",dict(details or {}))
         if (details or {}).get('ident'):
@@ -365,7 +368,7 @@ def main():
             if not ready:engine.debug.update(head='UNKNOWN',gaze='UNKNOWN')
             window['test'].view.setEnabled(ready)
             conditions=policy.observations(engine,now,ready)
-            changes,notices=policy.update(conditions,now)
+            changes,notices=policy.update(conditions,now,policy.ages(engine,now))
             recorder.submit(changes)
             for row in changes:
                 if not row['closed'] and row['level']==0 and row['duration']==0:

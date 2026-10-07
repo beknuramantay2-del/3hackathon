@@ -33,7 +33,7 @@ class EpisodePolicy:
                 if new:
                     ep=Episode(uuid.uuid4().hex,kind,now,now); self.active[kind]=ep
                 ep.last_seen=now; ep.duration=max(0.,now-ep.started)
-                ep.measurement_age_ms=age
+                ep.measurement_age_ms=age.get(kind) if isinstance(age,dict) else age
                 old=ep.level
                 if kind=='PHONE_DETECTED': ep.level=2
                 elif kind.startswith('PHONE_'): ep.level=0  # companion evidence, no alert storm
@@ -45,6 +45,16 @@ class EpisodePolicy:
                 ep.closed=True; ep.duration=max(0.,ep.last_seen-ep.started)
                 changes.append(asdict(ep)); self.active.pop(kind); self.written.pop(ep.ident,None)
         return changes, notices
+
+    @staticmethod
+    def pulse(kind, now, level=2):
+        return asdict(Episode(uuid.uuid4().hex,kind,now,now,level=level,closed=True))
+
+    @staticmethod
+    def ages(engine, now):
+        return {kind: (max(0.,now-(engine.yolo if kind.startswith('PHONE_') else engine.face).captured_at)*1000
+                       if (engine.yolo if kind.startswith('PHONE_') else engine.face).seq>=0 else None)
+                for kind in engine.debug.get('conds',{})}
 
     def close(self):
         rows=[]

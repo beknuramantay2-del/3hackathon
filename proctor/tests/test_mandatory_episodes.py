@@ -138,3 +138,14 @@ def test_evidence_real_codec_database_preroll_and_hash(tmp_path):
     finally:
         if r.thread.is_alive():r.stop()
         store.close()
+
+def test_guard_pulse_and_actual_measurement_age():
+    row=EpisodePolicy.pulse('HOTKEY_BLOCKED',100,2)
+    assert row['closed'] and row['duration']==0 and row['level']==2
+    cfg=yaml.safe_load(open('proctor/config.yaml'));e=RuleEngine(cfg)
+    e.debug={'conds':{'GAZE_DOWN':True,'PHONE_DETECTED':True}}
+    e.face=FaceResult(seq=1,captured_at=99.9);e.yolo=YoloResult(seq=2,captured_at=99.8)
+    ages=EpisodePolicy.ages(e,100)
+    assert ages['GAZE_DOWN']==pytest.approx(100.) and ages['PHONE_DETECTED']==pytest.approx(200.)
+    p=EpisodePolicy();changes,_=p.update({'GAZE_DOWN':True},100,ages)
+    assert changes[0]['measurement_age_ms']==pytest.approx(100.)

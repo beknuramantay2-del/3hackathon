@@ -1,6 +1,7 @@
 """Two labelled passes; a neutral-only/partial calibration never unlocks gaze."""
 import numpy as np
 from .calibration import Calibration, CalibrationError, POSES
+LABELS={"CENTER":"Прямо","LEFT":"Влево","RIGHT":"Вправо","UP":"Вверх","DOWN":"Вниз"}
 
 
 def calibration_complete(base):
@@ -41,7 +42,10 @@ class MandatoryCalibration:
                             left_eye=f.left_eye, right_eye=f.right_eye)
 
     def _finish_head(self):
-        measured = {p: self.cal.trimmed(self.cal.samples[p], self.min_samples) for p in POSES}
+        measured={}
+        for p in POSES:
+            try:measured[p]=self.cal.trimmed(self.cal.samples[p],self.min_samples)
+            except CalibrationError as exc:raise CalibrationError('Голова · '+LABELS[p]+': '+str(exc)) from exc
         center, mad = measured['CENTER']
         if max(mad[:2]) > 3:
             raise CalibrationError('Голова в центре нестабильна: сядьте прямо и повторите')
@@ -50,7 +54,7 @@ class MandatoryCalibration:
             axis = 0 if p in ('LEFT', 'RIGHT') else 1
             delta = measured[p][0][:2]-center[:2]
             if abs(delta[axis]) < max(7., 5*mad[axis]) or abs(delta[1-axis]) > max(5., .8*abs(delta[axis])):
-                raise CalibrationError('Не различён поворот головы: '+p)
+                raise CalibrationError('Не различён поворот головы: '+LABELS[p])
             targets[p] = list(map(float, delta))
         thresholds = []
         for a, b, axis in (('LEFT', 'RIGHT', 0), ('UP', 'DOWN', 1)):
@@ -70,9 +74,12 @@ class MandatoryCalibration:
             self.cal = Calibration(15., min_samples=self.min_samples, settle=.6, reject_head_motion=True)
             self.cal.start(now)
             return False
+        for p in POSES:
+            try:self.cal.trimmed(self.cal.samples[p],self.min_samples)
+            except CalibrationError as exc:raise CalibrationError('Глаза · '+LABELS[p]+': '+str(exc)) from exc
         base = self.cal.finish(allow_partial=False)
         if base['unresolved_targets'] or len(base['eye_centers']) != 2:
-            raise CalibrationError('Глаза не различают все направления. Свет на лицо, без бликов; повторите')
+            raise CalibrationError('Не различены глаза: '+', '.join(LABELS[p] for p in base['unresolved_targets'])+'. Свет на лицо, без бликов; повторите')
         # The neutral head sample in the eyes pass compensates repositioning between passes.
         yaw, pitch = base['yaw'], base['pitch']
         base.update(self.head_base)
