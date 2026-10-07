@@ -154,7 +154,7 @@ def main():
     signals.exit.connect(exit_requested)
     window.finish.connect(exit_requested)
     window.phone_threshold.setValue(yc['conf_phone'])
-    window.phone_threshold.valueChanged.connect(lambda value:setattr(yolo,'requested_confidence',float(value)))
+    window.phone_threshold.valueChanged.connect(lambda value:(setattr(yolo,'requested_confidence',float(value)),yc.update(conf_phone=float(value))))
     window.gaze_hold.setValue(policy.yellow)
     window.down_hold.setValue(policy.red)
     def update_policy():
@@ -267,8 +267,8 @@ def main():
         window.set_observation(('не обнаружено' if f.n_faces==0 else 'ученик в кадре' if f.n_faces==1 else f'{f.n_faces} · возможен второй человек') if ff else 'нет свежих данных',phone_display)
         window.show_directions(d.get('head'),d.get('gaze'),ready)
         labels=('ЗЕЛЁНЫЙ · активных предупреждений нет','ЖЁЛТЫЙ · требуется наблюдение','КРАСНЫЙ · требуется проверка экзаменатором')
-        window.signal_badge.setText(labels[policy.level] if ready else 'Калибровка обязательна · экзамен не готов')
-        window.signal_badge.setStyleSheet('color: '+(('#91cdaa','#f4c36f','#ff8c8c')[policy.level] if ready else '#a5b3c9'))
+        window.signal_badge.setText(labels[policy.level]+(' · калибровка не завершена' if not ready else '') if policy.level else labels[0] if ready else 'Калибровка обязательна · экзамен не готов')
+        window.signal_badge.setStyleSheet('color: '+(('#91cdaa','#f4c36f','#ff8c8c')[policy.level] if ready or policy.level else '#a5b3c9'))
         window.highlight_gaze(bool(engine.calib) and calibration is None and any(k.startswith('GAZE_') for k in d.get('warnings_active',[])))
         if d.get('gaze')=='UNKNOWN':window.gaze_card.note.setText(f.gaze_reason or 'Нет свежего измерения глаз')
         seconds=int(now-started);window.session_clock.setText(f'{seconds//60:02}:{seconds%60:02}')
@@ -290,7 +290,7 @@ def main():
         confidence=f'{pmax:.2f}' if pmax is not None and yf else 'нет свежего кандидата'
         recovery=any(p.confirmed and p.observed and p.conf<yolo.conf_phone and p.strong_at is not None and now-p.strong_at<=.8 for p in y.phones)
         support=', '.join(sorted({p.support_kind for p in y.phones if p.observed and p.confirmed and p.support_kind}))
-        window.measurements.setText(f'HEAD Δ yaw / pitch: {head_numbers}\n'
+        window.measurements.setText(f'HEAD Δ yaw / pitch: {head_numbers}; face-local 3D (не метрическая точность)\n'
             f'GAZE Δ H / V: {gaze_numbers}; глаз L {left}, R {right}\n'
             f'HEAD вход: yaw {t.get("yaw")}° / pitch {t.get("pitch")}°; выход 70% порога\n'
             f'GAZE вход L/R/U/D: {gate_text}\n'

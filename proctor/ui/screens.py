@@ -90,10 +90,11 @@ class CalibrationView(QWidget):
     prompts = ("Смотрите прямо. Голова неподвижна", "Глазами влево. Голова прямо",
                "Глазами вправо. Голова прямо", "Глазами вверх. Голова прямо", "Глазами вниз. Голова прямо")
 
-    def __init__(self, seconds=20.0):
+    def __init__(self, seconds=20.0, external=False):
         super().__init__()
         self.setObjectName("root")
         self.seconds = seconds
+        self.external = external
         self.started_at = 0.
         self.last_phase = -1
         lay = QVBoxLayout(self)
@@ -134,10 +135,12 @@ class CalibrationView(QWidget):
         self.step()
 
     def failed(self, text):
+        self.t.stop()
         self.message.setText(text)
         self.retry.setVisible(True)
 
     def step(self):
+        if self.external:return  # worker-validated mandatory workflow owns completion
         elapsed = time.monotonic()-self.started_at
         phase = min(4,int(elapsed/(self.seconds/5)))
         if phase != self.last_phase:

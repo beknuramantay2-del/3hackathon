@@ -61,7 +61,7 @@ class EpisodePolicy:
         # A current strong raw candidate is evidence without waiting for tracker confirmation.
         # Low-confidence candidates still need existing spatial/temporal confirmation.
         conds['PHONE_DETECTED']=bool(y.seq>=0 and engine.fresh(y,now) and
-            (y.phone_voted or any(p.observed and p.conf>=self.phone_conf for p in y.candidates)))
+            (y.phone_voted or any(p.observed and p.conf>=max(self.phone_conf,engine.cfg.get("yolo",{}).get("conf_phone",0.)) for p in y.candidates)))
         return conds
 
     @property

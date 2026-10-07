@@ -19,7 +19,7 @@ class EvidenceRecorder:
         self.ring=deque(maxlen=int(fps*pre)+2); self.active=set(); self.tags=set()
         self.writer=None; self.clip_tags=set(); self.capture_times=[]; self.clip_start=0.
         self.stop_event=threading.Event(); self.error=''; self.failures=0; self.clips=0
-        self.post_until=0.; self.last_encoded=-1e9; self.path=None
+        self.retry_at=0.; self.post_until=0.; self.last_encoded=-1e9; self.path=None
         self.thread=threading.Thread(target=self._run,name='evidence-recorder',daemon=True); self.thread.start()
 
     def push(self, packet):
@@ -75,7 +75,7 @@ class EvidenceRecorder:
         self._changes()
         if self.writer is not None and (now-self.clip_start>=self.segment or not self.active and now>=self.post_until):
             self._finish()
-        if self.writer is None and (self.active or self.tags and now<self.post_until): self._open(now)
+        if self.writer is None and now>=self.retry_at and (self.active or self.tags and now<self.post_until): self._open(now)
         self.tags.clear()
         version,p=self.frames.take_after(version)
         if p is None or now-p.captured_at>.7 or p.captured_at-self.last_encoded<1/self.fps:
@@ -96,7 +96,7 @@ class EvidenceRecorder:
         while not self.stop_event.wait(.015):
             try: version=self._step(time.monotonic(),version)
             except Exception as exc:
-                self.error=str(exc); self.failures+=1
+                self.error=str(exc); self.failures+=1; self.retry_at=time.monotonic()+1.
                 if self.writer is not None: self.writer.release(); self.writer=None
         try:
             self._changes(); self._finish(truncated=bool(self.active))

@@ -16,7 +16,8 @@ from proctor.core.overlay import render_overlay
 from proctor.core.detector_yolo import DetectorYolo
 from proctor.core.face_mesh import FaceMeshThread
 from proctor.core.hands import HandsThread
-from proctor.core.calibration import Calibration,CalibrationError
+from proctor.core.calibration import CalibrationError
+from proctor.core.mandatory_calibration import MandatoryCalibration,calibration_complete
 from proctor.core.rules import RuleEngine
 from proctor.core.events import make_violation,SEVERITY
 from proctor.core.store import Store,EventWriter
@@ -129,7 +130,7 @@ def main():
     writer = EventWriter(store)
     trust = TrustCalculator(cfg["trust_weights"])
     engine = RuleEngine(cfg)
-    calibration = Calibration(cfg["calibration"]["duration_sec"])
+    calibration = MandatoryCalibration()
     metrics = Timings()
     state = dict(active=False,calibrating=False,done=False,started=0.,fio="",status="Подготовка")
     window = {"test":None}
@@ -218,7 +219,7 @@ def main():
                     ("Камера не виртуальная (эвристика)",not camera_check["blocked"])])
         return out
     pre = PreflightScreen(checks)
-    cal_view = CalibrationView(calibration.duration)
+    cal_view = CalibrationView(calibration.duration, external=True)
     stack.addWidget(pre); stack.addWidget(cal_view)
 
     def unlock_monitors():
@@ -229,6 +230,9 @@ def main():
     pre.on_unlock = unlock_monitors
 
     def start_calibration():
+        nonlocal calibration
+        calibration=MandatoryCalibration()
+        engine.calib={}
         pre.poll.stop()
         state["fio"],state["calibrating"] = pre.fio_text,True
         stack.setCurrentWidget(cal_view)
@@ -247,9 +251,9 @@ def main():
     def calibration_done():
         state["calibrating"] = False
         try:
-            engine.calib = calibration.finish()
-            if engine.calib["unresolved_targets"]:
-                raise CalibrationError("Не удалось измерить позы взгляда: "+", ".join(engine.calib["unresolved_targets"])+". Повторите, двигая только глазами")
+            if not calibration_complete(calibration.base):
+                raise CalibrationError("Обязательная калибровка головы и глаз не завершена")
+            engine.calib = calibration.base
             if not all(good for _,good in checks()):
                 raise CalibrationError("Проверка устройств не пройдена: вернитесь на старт")
         except CalibrationError as e:
@@ -305,12 +309,26 @@ def main():
                 metrics.add(name,elapsed)
             if worker is face:
                 engine.on_face(result)
-                if state["calibrating"] and result.n_faces == 1 and result.pose_valid and result.gaze_valid and now-result.captured_at < .5:
-                    calibration.add(result.yaw,result.pitch,result.iris_h,result.iris_v,now=result.captured_at,left_eye=result.left_eye,right_eye=result.right_eye)
+                if state["calibrating"] and now-result.captured_at < .5:
+                    calibration.feed(result)
             elif worker is yolo:
                 engine.on_yolo(result)
             else:
                 engine.on_hands(result)
+        if state["calibrating"]:
+            phase=calibration.phase(now);stage=calibration.stage
+            instruction='поверните голову' if stage=='head' else 'двигайте только глазами; голова прямо'
+            label={'CENTER':'прямо','LEFT':'влево','RIGHT':'вправо','UP':'вверх','DOWN':'вниз'}[phase]
+            cal_view.title.setText('Обязательная калибровка: '+('голова' if stage=='head' else 'глаза'))
+            cal_view.prompt.setText(instruction+' · '+label)
+            cal_view.counter.setText(f'Осталось {calibration.remaining(now):.1f} с')
+            marker=(stage,phase)
+            if cal_view.last_phase!=marker:
+                cal_view.last_phase=marker;QApplication.beep()
+            try:
+                if calibration.advance(now):calibration_done()
+            except CalibrationError as exc:
+                state['calibrating']=False;engine.calib={};cal_view.failed(str(exc))
         if state["active"]:
             s = time.perf_counter()
             # Disable evidence from a dead/stalled worker; never keep a phone or gaze forever.
