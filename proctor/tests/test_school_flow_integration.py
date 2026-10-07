@@ -32,6 +32,7 @@ def test_native_authenticated_exam_round_trip(tmp_path):
             base=dict(complete=True,cal_version=2,mode='synthetic-test-stub',head_calibrated=True,yaw=0,pitch=0,iris_h=.5,iris_v=.5,head_x_threshold=10,head_y_threshold=8,gaze_x_threshold=.08,gaze_y_threshold=.08,head_targets={'LEFT':[-20,0],'RIGHT':[20,0],'UP':[0,-20],'DOWN':[0,20]},gaze_targets={'LEFT':[.2,0],'RIGHT':[-.2,0],'UP':[0,-.2],'DOWN':[0,.2]})
             def start(self,now):self.started_at=now
             def feed(self,f):pass
+            def preview(self):return dict(self.base,complete=False,head_center_measured=True,gaze_center_measured=True)
             def phase(self,now):return 'CENTER'
             def remaining(self,now):return .5
             def advance(self,now):return now-self.started_at>.5

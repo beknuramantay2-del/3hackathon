@@ -113,6 +113,7 @@ class CalibrationView(QWidget):
         self.preview.setFixedSize(320,240)
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.preview,0,Qt.AlignmentFlag.AlignCenter)
+        self.directions=QLabel('ГОЛОВА: — · ГЛАЗА: —');self.directions.setWordWrap(True);self.directions.setAlignment(Qt.AlignmentFlag.AlignCenter);lay.addWidget(self.directions)
         self.message = QLabel("")
         self.message.setWordWrap(True)
         lay.addWidget(self.message)

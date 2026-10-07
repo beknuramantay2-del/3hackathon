@@ -26,7 +26,7 @@ def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35,states=None):
             if mirror:
                 x=w-x
             cv2.circle(vis,(x,y),3,(240,220,40),-1)
-            if states and states.get("calibrated") and face.gaze_valid:
+            if states and (states.get("calibrated") or states.get("preview_ready")) and (face.gaze_valid or face.gaze_preview_valid):
                 gaze=states.get("gaze","UNKNOWN")
                 sign=1 if mirror else -1
                 vectors={"LEFT":(-18*sign,0),"RIGHT":(18*sign,0),"UP":(0,-18),"DOWN":(0,18)}
@@ -34,6 +34,17 @@ def render_overlay(packet,face,yolo,hands,mirror=True,max_age=.35,states=None):
                     dx,dy=vectors[gaze]
                     color=(50,180,240) if "GAZE_"+gaze in states.get("warnings_active",[]) else (240,180,75)
                     cv2.arrowedLine(vis,(x,y),(max(1,min(w-2,x+dx)),max(1,min(h-2,y+dy))),color,2,tipLength=.4)
+        if states and (states.get('calibrated') or states.get('preview_ready')) and face.pose_valid and face.face_box:
+            direction=states.get('head','UNKNOWN')
+            if direction!='UNKNOWN':
+                x1,y1,x2,y2=face.face_box;x=int((x1+x2)/2);y=max(24,int(y1)-18)
+                if mirror:x=w-x
+                text='HEAD '+direction+(' preview' if not states.get('calibrated') else '')
+                cv2.putText(vis,text,(max(0,min(w-150,x-60)),y),cv2.FONT_HERSHEY_SIMPLEX,.45,(240,180,75),1)
+                sign=1 if mirror else -1
+                vector={'LEFT':(-24*sign,0),'RIGHT':(24*sign,0),'UP':(0,-20),'DOWN':(0,20)}.get(direction)
+                if vector:
+                    dx,dy=vector;cv2.arrowedLine(vis,(x,min(h-2,y+5)),(max(1,min(w-2,x+dx)),max(1,min(h-2,y+5+dy))),(240,180,75),2,tipLength=.4)
     if fresh(yolo):
         for b in yolo.persons:
             draw((b.x1,b.y1,b.x2,b.y2),"person",(240,140,70))

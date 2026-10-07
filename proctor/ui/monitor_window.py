@@ -38,7 +38,7 @@ class DirectionReadout(QFrame):
         super().__init__();self.title=title;self.setObjectName('panel')
         layout=QVBoxLayout(self);layout.setContentsMargins(10,6,10,6)
         self.state=QLabel(title+': — Не определяется');self.state.setObjectName('directionValue');self.state.setWordWrap(True);layout.addWidget(self.state)
-        self.note=QLabel(self);self.note.hide();self.chips={}
+        self.note=QLabel(self);self.note.setObjectName('muted');self.note.setWordWrap(True);layout.addWidget(self.note);self.note.hide();self.chips={}
     def update_state(self,state):
         state=state if state in DIRECTIONS else 'UNKNOWN'
         self.state.setText(self.title+': '+ARROWS[state]+' '+DIRECTIONS[state]);self.state.setToolTip(self.note.text())
@@ -131,11 +131,13 @@ class MonitorWindow(QWidget):
     def calibration_finished(self,message):
         self.neutral.setEnabled(False);self.five.setEnabled(True);self.target.hide();self._pose=None;self.calibration_note.setText(message)
 
-    def show_directions(self,head,gaze,calibrated=True):
-        self.head_card.update_state(head if calibrated else 'UNKNOWN');self.gaze_card.update_state(gaze if calibrated else 'UNKNOWN')
-        self.head_card.note.setText('Отдельно от движения глаз' if calibrated else 'Сначала настройте центральную позу')
-        self.gaze_card.note.setText('Измерение положения зрачков' if calibrated else 'Предварительно · предупреждения выключены')
-
+    def show_directions(self,head,gaze,calibrated=True,preview=False,head_calibrated=None,gaze_calibrated=None):
+        head_ok=calibrated if head_calibrated is None else head_calibrated
+        gaze_ok=calibrated if gaze_calibrated is None else gaze_calibrated
+        for card,state,qualified in ((self.head_card,head,head_ok),(self.gaze_card,gaze,gaze_ok)):
+            card.update_state(state if calibrated or preview else 'UNKNOWN')
+            card.note.setText('Предварительно · без предупреждений' if not qualified and preview else 'Нужна калибровка' if not calibrated else '')
+            card.note.setVisible(bool(card.note.text()))
 
     def show_frame(self,frame):
         self.camera.set_frame(frame)

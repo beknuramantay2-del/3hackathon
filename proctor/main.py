@@ -37,6 +37,7 @@ from proctor.guard.clipboard import ClipboardGuard
 from proctor.guard.displays import monitor_count
 from proctor.guard.security import verify_password,FULL_GUARD
 from proctor.ui.screens import PreflightScreen,CalibrationView,SidePanel
+from proctor.ui.monitor_window import DIRECTIONS,ARROWS
 from proctor.ui.test_window import TestWindow
 from proctor.report.generator import generate
 from proctor.school.exam import SchoolExam,exam_html
@@ -258,7 +259,7 @@ def main():
     def start_calibration():
         nonlocal calibration
         calibration=MandatoryCalibration()
-        engine.calib={}
+        engine.calib={};engine.preview_base={}
         pre.poll.stop()
         state["fio"],state["calibrating"] = pre.fio_text,True
         stack.setCurrentWidget(cal_view)
@@ -321,7 +322,7 @@ def main():
         w.panel.debug_on = args.debug and not school
         w.panel.feed.itemDoubleClicked.connect(open_evidence)
         if school:
-            w.panel.states.hide();w.panel.feed.hide();w.panel.hold.hide();w.panel.hold_label.hide()
+            w.panel.states.show();w.panel.feed.hide();w.panel.hold.hide();w.panel.hold_label.hide()
             w.panel.set_status('Камера активна. Ответы и записи сохраняются локально.')
             staff_button=QPushButton('Экзаменатор',w.panel);staff_button.setObjectName('secondary');staff_button.clicked.connect(examiner_view);w.panel.layout().addWidget(staff_button)
         stack.addWidget(w); stack.setCurrentWidget(w)
@@ -372,6 +373,7 @@ def main():
                 engine.on_face(result)
                 if state["calibrating"] and now-result.captured_at < .5:
                     calibration.feed(result)
+                    engine.preview_base=calibration.preview()
             elif worker is yolo:
                 engine.on_yolo(result)
             else:
@@ -383,6 +385,11 @@ def main():
             cal_view.title.setText('Обязательная калибровка: '+('голова' if stage=='head' else 'глаза'))
             cal_view.prompt.setText(instruction+' · '+label)
             cal_view.counter.setText(f'Осталось {calibration.remaining(now):.1f} с')
+            engine.tick(now,directions_enabled=False)
+            engine.debug['calibrated']=False
+            engine.debug.update(head=engine.debug['head_display'],gaze=engine.debug['gaze_display'])
+            preview_head=engine.debug['head'];preview_gaze=engine.debug['gaze']
+            cal_view.directions.setText('ГОЛОВА: '+ARROWS[preview_head]+' '+DIRECTIONS[preview_head]+' · ГЛАЗА: '+ARROWS[preview_gaze]+' '+DIRECTIONS[preview_gaze]+'\nПредварительные измерения · предупреждения выключены')
             marker=(stage,phase)
             if cal_view.last_phase!=marker:
                 cal_view.last_phase=marker;QApplication.beep()
@@ -404,7 +411,7 @@ def main():
             engine.tick(now,directions_enabled=ready)
             engine.debug['calibrated']=ready
             engine.debug['immediate_phone_conf']=max(policy.phone_conf,yolo.conf_phone)
-            if not ready:engine.debug.update(head='UNKNOWN',gaze='UNKNOWN')
+            engine.debug.update(head=engine.debug['head_display'],gaze=engine.debug['gaze_display'])
             window['test'].view.setEnabled(ready)
             conditions=policy.observations(engine,now,ready)
             changes,notices=policy.update(conditions,now,policy.ages(engine,now))
@@ -436,7 +443,9 @@ def main():
             n_faces,n_phones = d.get("n_faces"),d.get("phones")
             face_status = "UNKNOWN" if n_faces is None else (f"DETECTED ({n_faces})" if n_faces else "LOST")
             phone_status = "UNKNOWN" if n_phones is None else ("DETECTED" if d["conds"]["PHONE_DETECTED"] else ("CANDIDATE" if n_phones else "NOT DETECTED"))
-            panel.states.setText(f"HEAD: {d.get('head','UNKNOWN')}\nGAZE: {d.get('gaze','UNKNOWN')}\nFACE: {face_status}\nPHONE: {phone_status}")
+            hd,gd=d.get('head','UNKNOWN'),d.get('gaze','UNKNOWN')
+            eye_note=' (предварительно)' if not d.get('gaze_display_calibrated') and gd!='UNKNOWN' else ''
+            panel.states.setText(f"ГОЛОВА: {ARROWS[hd]} {DIRECTIONS[hd]}\nГЛАЗА: {ARROWS[gd]} {DIRECTIONS[gd]}{eye_note}\nЛИЦО: {face_status}\nТЕЛЕФОН: {phone_status}")
             active=[e for e in policy.active.values() if e.kind.startswith(('HEAD_','GAZE_'))]
             if active:
                 ep=max(active,key=lambda e:e.duration)
