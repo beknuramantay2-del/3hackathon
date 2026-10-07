@@ -311,7 +311,7 @@ def main():
             window.progress.setValue(0);window.progress.setFormat('Нет активного отвода / предупреждения')
         def state_for(key):
             ep=policy.active.get(key)
-            return ('АКТИВНО' if ep else 'не наблюдается')+f' · {ep.duration if ep else 0.:.1f} с'+(' · сразу' if key=='PHONE_DETECTED' else f' · {policy.yellow:.0f}/{policy.red:.0f} с')
+            return ('АКТИВНО' if ep else 'не наблюдается')+f' · {ep.duration if ep else 0.:.1f} с'+(' · сразу' if key=='PHONE_DETECTED' else ' · футаж, без отдельного таймера тревоги' if key.startswith('PHONE_') else f' · {policy.yellow:.0f}/{policy.red:.0f} с')
         window.set_case('PHONE',phone_text)
         for item,kind in (('HAND','PHONE_IN_HAND'),('LIFT','PHONE_LIFTED'),('RAISED','PHONE_RAISED'),('AIM','PHONE_AIMED')):
             available=yf and (item!='HAND' or hands is not None and hands.status=='ready' and engine.fresh(engine.hands,now,.5))

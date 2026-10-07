@@ -160,8 +160,20 @@ def load_config(path=None, profile=None, require_test_url=True):
         value = cfg.get(section,{}).get(key,default)
         if isinstance(value,bool) or not isinstance(value,(int,float)) or value <= 0:
             raise ConfigError(f"{NAME}: {section}.{key} должно быть > 0")
-    if cfg["calibration"]["duration_sec"] < 10:
-        raise ConfigError(f"{NAME}: calibration.duration_sec >= 10 для пяти поз")
+    if cfg["calibration"]["duration_sec"] != 30:
+        raise ConfigError(f"{NAME}: calibration.duration_sec = 30: отдельно 15 с головы + 15 с глаз")
+    pc=cfg.get('policy',{})
+    yellow,red=pc.get('yellow_sec',3.),pc.get('red_sec',5.)
+    if not isinstance(yellow,(int,float)) or not isinstance(red,(int,float)) or not .5<=yellow<red<=30:
+        raise ConfigError(f"{NAME}: policy: 0.5 <= yellow_sec < red_sec <= 30")
+    immediate=pc.get('immediate_phone_conf',.55)
+    if not isinstance(immediate,(int,float)) or not .3<=immediate<=1:
+        raise ConfigError(f"{NAME}: policy.immediate_phone_conf в [0.3,1]")
+    ec=cfg.get('evidence',{})
+    for key,default,low,high in (('fps',5,1,10),('pre_sec',2.,0,5),('post_sec',2.,0,5),('segment_sec',15.,5,60)):
+        value=ec.get(key,default)
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or not low<=value<=high:
+            raise ConfigError(f"{NAME}: evidence.{key} в [{low},{high}]")
 
     cfg["profile"] = prof
     cfg["_domains"] = domains

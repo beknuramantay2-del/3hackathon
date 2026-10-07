@@ -49,7 +49,7 @@ face:
 
 calibration:
   # 5 поз взгляда по 4 с, переходы и выбросы исключаются.
-  duration_sec: 20.0
+  duration_sec: 30.0
 
 # Проверка камеры на старте. Эвристика по имени устройства, не гарантия.
 # Неизвестное имя не блокирует.
@@ -201,7 +201,7 @@ examiner:
 # Пустая salt_hex генерируется при первом старте.
 hash_chain:
   enabled: true
-  salt_hex: "ab47662a8d15fbffa16f3f7813b94e4b"
+  salt_hex: ""
 
 report:
   out: data/report.html
