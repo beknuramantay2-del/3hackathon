@@ -27,7 +27,7 @@ class EpisodePolicy:
             if conditions.get(kind):
                 # A gap larger than tolerance must reset even if no false poll happened.
                 if ep is not None and now-ep.last_seen > self.gap+.1:
-                    ep.closed=True; changes.append(asdict(ep)); self.active.pop(kind)
+                    ep.closed=True; changes.append(asdict(ep)); self.active.pop(kind); self.written.pop(ep.ident,None)
                     ep=None
                 new = ep is None
                 if new:

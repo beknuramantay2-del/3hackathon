@@ -28,6 +28,13 @@ class Store:
         if "event_hash" not in cols:
             self.con.execute("ALTER TABLE events ADD COLUMN event_hash TEXT")
         self.con.execute("CREATE INDEX IF NOT EXISTS idx_events_type_start ON events(type,t_start)")
+        self.con.executescript("""
+            CREATE TABLE IF NOT EXISTS episodes(
+              ident TEXT PRIMARY KEY, kind TEXT, started REAL, duration REAL,
+              level INTEGER, closed INTEGER, details TEXT);
+            CREATE TABLE IF NOT EXISTS clips(path TEXT PRIMARY KEY, metadata TEXT);
+            CREATE TABLE IF NOT EXISTS episode_clips(ident TEXT,path TEXT,PRIMARY KEY(ident,path));
+        """)
         self.con.commit()
         self.t0 = time.time()
         self.chain = EventHashChain(salt) if salt else None
@@ -70,6 +77,34 @@ class Store:
 
     def counts(self):
         return dict(self._rows("SELECT type,COUNT(*) FROM events GROUP BY type"))
+
+    def save_episode(self, episode, wall_offset, source):
+        e = dict(episode)
+        details = json.dumps(dict(e, source=source, wall_offset=wall_offset), ensure_ascii=False)
+        with self.lock:
+            try:
+                self.con.execute("INSERT INTO episodes VALUES(?,?,?,?,?,?,?) ON CONFLICT(ident) DO UPDATE SET duration=excluded.duration,level=excluded.level,closed=excluded.closed,details=excluded.details",
+                    (e['ident'],e['kind'],e['started']+wall_offset,e['duration'],e['level'],int(e['closed']),details))
+                self.con.commit()
+            except Exception:
+                self.con.rollback(); raise
+
+    def save_clip(self, path, metadata, episodes):
+        with self.lock:
+            try:
+                self.con.execute("INSERT OR REPLACE INTO clips VALUES(?,?)",(str(path),json.dumps(metadata,ensure_ascii=False)))
+                self.con.executemany("INSERT OR IGNORE INTO episode_clips VALUES(?,?)",[(ident,str(path)) for ident in episodes])
+                self.con.commit()
+            except Exception:
+                self.con.rollback(); raise
+
+    def clips_for(self, ident):
+        with self.lock:
+            return [(p,json.loads(m)) for p,m in self.con.execute(
+                "SELECT clips.path,clips.metadata FROM clips JOIN episode_clips USING(path) WHERE ident=? ORDER BY clips.path",(ident,))]
+
+    def episode_rows(self):
+        return self._rows("SELECT ident,kind,started,duration,level,closed,details FROM episodes ORDER BY started")
 
     def close(self):
         with self.lock:
