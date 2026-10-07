@@ -205,3 +205,15 @@ hash_chain:
 
 report:
   out: data/report.html
+
+# Default live CV policy; durations are review thresholds, not an automatic verdict.
+policy:
+  yellow_sec: 3.0
+  red_sec: 5.0
+  immediate_phone_conf: 0.55
+
+evidence:
+  fps: 5
+  pre_sec: 2.0
+  post_sec: 2.0
+  segment_sec: 15.0

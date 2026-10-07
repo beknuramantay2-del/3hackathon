@@ -2,7 +2,7 @@
 from PyQt6.QtCore import Qt,pyqtSignal,QRect
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QWidget,QLabel,QFrame,QVBoxLayout,QHBoxLayout,QPushButton,QGridLayout,
-    QProgressBar,QDoubleSpinBox,QTableWidget,QTableWidgetItem,QHeaderView,QListWidget,QSizePolicy,QTabWidget,QSplitter,QScrollArea)
+    QProgressBar,QDoubleSpinBox,QTableWidget,QTableWidgetItem,QHeaderView,QListWidget,QListWidgetItem,QSizePolicy,QTabWidget,QSplitter,QScrollArea)
 from .screens import SidePanel
 
 DIRECTIONS={'CENTER':'Прямо','LEFT':'Влево','RIGHT':'Вправо','UP':'Вверх','DOWN':'Вниз','UNKNOWN':'Не определяется'}
@@ -68,18 +68,19 @@ class MonitorWindow(QWidget):
         cards.addWidget(self.head_card);cards.addWidget(self.gaze_card);left.addLayout(cards)
         self.direction_labels={(kind,d):card.chips[d] for kind,card in (('HEAD',self.head_card),('GAZE',self.gaze_card)) for d in card.chips}
         self.progress=QProgressBar();self.progress.setRange(0,100);self.progress.setValue(0);self.progress.setFormat('Нет активного удержания');left.addWidget(self.progress)
-        self.calibration_note=QLabel('Для настройки взгляда сядьте прямо и следуйте пяти точкам. Это займёт 10 секунд.');self.calibration_note.setObjectName('muted');self.calibration_note.setWordWrap(True)
-        self.neutral=QPushButton('Обновить центр · 2 с');self.neutral.setObjectName('secondary');self.five=QPushButton('Настроить взгляд · 10 с')
+        self.calibration_note=QLabel('Обязательная настройка: 15 с — голова, 15 с — глаза. Без всех направлений экзамен не готов. Футаж хранится локально.');self.calibration_note.setObjectName('muted');self.calibration_note.setWordWrap(True)
+        self.neutral=QPushButton('Обновить центр · 2 с');self.neutral.setObjectName('secondary');self.five=QPushButton('Настроить голову и глаза · 30 с')
         self.neutral.clicked.connect(lambda:self.calibrate.emit('center'));self.five.clicked.connect(lambda:self.calibrate.emit('five'))
         header.insertWidget(header.count()-1,self.five)
         split.addWidget(left_widget)
         right_widget=QWidget();right_widget.setMinimumWidth(300);right_widget.setMaximumWidth(350);right=QVBoxLayout(right_widget);right.setContentsMargins(0,0,0,0);right.setSpacing(8)
         right.addWidget(self.mode_label);right.addWidget(self.banner)
+        self.signal_badge=QLabel("Калибровка обязательна");self.signal_badge.setObjectName("observationBadge");self.signal_badge.setWordWrap(True);right.addWidget(self.signal_badge)
         right.addLayout(presence);right.addWidget(self.calibration_note)
         self.tabs=QTabWidget();right.addWidget(self.tabs,1)
         events=QWidget();el=QVBoxLayout(events);el.setContentsMargins(12,16,12,12);el.setSpacing(12)
         hint=QLabel('События наблюдения');hint.setObjectName('sectionTitle');hint.setWordWrap(True);el.addWidget(hint)
-        note=QLabel('Короткий взгляд не создаёт событие. Удержание — под камерой.');note.setObjectName('muted');note.setWordWrap(True);el.addWidget(note)
+        note=QLabel('Каждый отвод записывается. 3 с — жёлтый, 5 с — красный. Телефон — сразу после надёжного обнаружения. Двойной клик — футаж.');note.setObjectName('muted');note.setWordWrap(True);el.addWidget(note)
         self.feed=QListWidget();self.feed.setWordWrap(True);self.feed.setAccessibleName('Лента событий');el.addWidget(self.feed,1)
         self.empty_feed=QLabel('Событий пока нет');self.empty_feed.setObjectName('muted');el.addWidget(self.empty_feed)
         self.tabs.addTab(events,'События')
@@ -98,11 +99,11 @@ class MonitorWindow(QWidget):
         self.performance=QLabel('Частота и возраст измерений: —');self.performance.setWordWrap(True);self.performance.setObjectName('diagnosticText');dl.addWidget(self.performance)
         knobs=QGridLayout();knobs.setVerticalSpacing(8)
         self.phone_threshold=self.spin(.15,.70,.05,.25,2)
-        self.gaze_hold=self.spin(.5,10,.5,2,1);self.down_hold=self.spin(.5,10,.5,3,1)
+        self.gaze_hold=self.spin(.5,10,.5,3,1);self.down_hold=self.spin(1,20,.5,5,1)
         self.yaw_threshold=self.spin(8,45,1,18,0);self.pitch_threshold=self.spin(8,35,1,12,0)
-        for i,(label,widget) in enumerate((('Порог уверенного телефона',self.phone_threshold),('Взгляд в сторону, с',self.gaze_hold),('Взгляд вверх / вниз, с',self.down_hold),('Поворот головы, °',self.yaw_threshold),('Наклон головы, °',self.pitch_threshold))):
+        for i,(label,widget) in enumerate((('Порог уверенного телефона',self.phone_threshold),('Жёлтый сигнал, с',self.gaze_hold),('Красный сигнал, с',self.down_hold),('Поворот головы, °',self.yaw_threshold),('Наклон головы, °',self.pitch_threshold))):
             l=QLabel(label);l.setWordWrap(True);knobs.addWidget(l,i,0);knobs.addWidget(widget,i,1)
-        dl.addLayout(knobs);dl.addWidget(self.neutral)
+        dl.addLayout(knobs);self.neutral.hide();self.neutral.setEnabled(False)
         explanation=QLabel('Confidence — оценка модели, не точность в %. Слабый телефон требует повторных наблюдений и руки либо согласия общего поиска и ROI. Изменение порогов влияет на события.');explanation.setWordWrap(True);explanation.setObjectName('muted');dl.addWidget(explanation);dl.addStretch(1)
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);scroll.setWidget(diagnostic)
         self.tabs.addTab(scroll,'Настройки')
@@ -121,16 +122,17 @@ class MonitorWindow(QWidget):
         coords={'CENTER':(w/2,h/2),'LEFT':(pad,h/2),'RIGHT':(w-pad,h/2),'UP':(w/2,pad),'DOWN':(w/2,h-pad)}
         x,y=coords[pose];self.target.move(int(x-24),int(y-24));self.target.show();self.target.raise_()
 
-    def calibration_running(self,pose,remaining,total):
+    def calibration_running(self,pose,remaining,total,stage="gaze"):
         self.neutral.setEnabled(False);self.five.setEnabled(False)
-        self.calibration_note.setText(f'{ARROWS[pose]} {DIRECTIONS[pose]}: смотрите на точку, голова неподвижна · осталось {remaining:.0f} с')
+        instruction='поверните только голову в указанную сторону' if stage=='head' else 'смотрите только глазами на точку, голова прямо'
+        self.calibration_note.setText(f'{ARROWS[pose]} {DIRECTIONS[pose]}: {instruction} · осталось {remaining:.0f} с')
         self.progress.setValue(int(100*(1-remaining/max(total,.01))));self.progress.setFormat('Настройка взгляда — следуйте точке')
 
     def calibration_finished(self,message):
-        self.neutral.setEnabled(True);self.five.setEnabled(True);self.target.hide();self._pose=None;self.calibration_note.setText(message)
+        self.neutral.setEnabled(False);self.five.setEnabled(True);self.target.hide();self._pose=None;self.calibration_note.setText(message)
 
     def show_directions(self,head,gaze,calibrated=True):
-        self.head_card.update_state(head);self.gaze_card.update_state(gaze)
+        self.head_card.update_state(head if calibrated else 'UNKNOWN');self.gaze_card.update_state(gaze if calibrated else 'UNKNOWN')
         self.head_card.note.setText('Отдельно от движения глаз' if calibrated else 'Сначала настройте центральную позу')
         self.gaze_card.note.setText('Измерение положения зрачков' if calibrated else 'Предварительно · предупреждения выключены')
 
@@ -157,8 +159,10 @@ class MonitorWindow(QWidget):
             color='#9ba9bd' if any(k in text for k in ('UNKNOWN','НЕ АКТИВНО','Нет браузера','Не измерено','Не определяется','предварительно')) else '#efbb72' if any(k in text for k in ('АКТИВНО','CANDIDATE','эвристика')) else '#dce5f2'
             item.setForeground(QColor(color));self.checklist.resizeRowToContents(self.rows[key])
 
-    def log(self,text):
-        self.empty_feed.hide();self.feed.insertItem(0,text)
+    def log(self,text,level=None,episode_id=''):
+        self.empty_feed.hide();item=QListWidgetItem(text);item.setData(Qt.ItemDataRole.UserRole,episode_id)
+        if level is not None:item.setForeground(QColor(('#91cdaa','#f4c36f','#ff8c8c')[min(2,max(0,level))]))
+        self.feed.insertItem(0,item)
         while self.feed.count()>100:self.feed.takeItem(self.feed.count()-1)
 
     def closeEvent(self,event):
