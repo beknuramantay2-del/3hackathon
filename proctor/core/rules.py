@@ -91,8 +91,9 @@ class RuleEngine:
         ff,yf,hf = self.fresh(f,now),self.fresh(y,now),self.fresh(self.hands,now,.5)
         present = ff and f.n_faces >= 1
         base = dict(self.calib)
-        base["head_x_threshold"] = max(base.get("head_x_threshold",0),self.cfg["rules"]["gaze_side"]["yaw_thresh"])
-        base["head_y_threshold"] = max(base.get("head_y_threshold",0),self.cfg["rules"]["gaze_down"]["pitch_thresh"])
+        if not base.get("head_calibrated") or self.cfg.get("head_threshold_override"):
+            base["head_x_threshold"] = max(base.get("head_x_threshold",0),self.cfg["rules"]["gaze_side"]["yaw_thresh"])
+            base["head_y_threshold"] = max(base.get("head_y_threshold",0),self.cfg["rules"]["gaze_down"]["pitch_thresh"])
         base.setdefault("gaze_x_threshold",self.cfg["rules"]["gaze_side"]["iris_thresh"])
         base.setdefault("gaze_y_threshold",self.cfg["rules"]["gaze_down"].get("iris_thresh",.12))
         head = self.head.update(f.yaw,f.pitch,base,now,present and f.pose_valid and not f.primary_changed)

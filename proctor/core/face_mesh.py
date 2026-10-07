@@ -5,7 +5,7 @@ import numpy as np
 from .worker import LatestWorker
 from .models import FaceResult
 from .camera import CameraThread
-from .geometry import head_pose,eye_gaze,TimeEMA
+from .geometry import head_pose_mesh,eye_gaze,TimeEMA
 from .tracking import iou
 
 class FaceMeshThread(LatestWorker):
@@ -105,15 +105,15 @@ class FaceMeshThread(LatestWorker):
         result.n_faces=len(result.face_boxes)
         result.primary_changed=changed
         s=time.perf_counter()
-        pose=head_pose(pts,w,h)
+        xyz=np.array([(p.x*(rx2-rx1)+rx1,p.y*(ry2-ry1)+ry1,p.z*(rx2-rx1)) for p in lm])
+        pose=head_pose_mesh(xyz)
         if pose is not None:
             result.yaw,result.pitch,result.roll=self.pose_filter.update(pose,now)
             result.pose_valid=True
         else:
-            result.pose_reason="PnP: плохая геометрия/ракурс, превышен reprojection gate"
+            result.pose_reason="Face-local basis: плохая геометрия/крайний ракурс"
         result.timings["head_pose"]=time.perf_counter()-s
         s=time.perf_counter()
-        xyz=np.array([(p.x*(rx2-rx1)+rx1,p.y*(ry2-ry1)+ry1,p.z*(rx2-rx1)) for p in lm])
         left,right,gaze=eye_gaze(pts,xyz)
         result.left_eye=self.left_filter.update(left,now) if left is not None else None
         result.right_eye=self.right_filter.update(right,now) if right is not None else None

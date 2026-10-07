@@ -108,3 +108,29 @@ class TimeEMA:
 
     def reset(self):
         self.value = self.last = None
+
+
+def head_pose_mesh(xyz):
+    """Rotation of an orthogonal face-local basis; MP depth is relative, not metric.
+    Avoid generic PnP model mismatch on faces/glasses; label signs are calibrated.
+    Reject degenerate/extreme geometry rather than inventing a head direction.
+    """
+    a = np.asarray(xyz, dtype=float)
+    if len(a) <= 263 or not np.isfinite(a).all():
+        return None
+    ex = a[263]-a[33]
+    width = np.linalg.norm(ex)
+    if width < 20:
+        return None
+    ex /= width
+    ey = a[152]-a[10]
+    ey -= ex*np.dot(ey, ex)
+    length = np.linalg.norm(ey)
+    if length < width*.7:
+        return None
+    ey /= length
+    rot = np.column_stack((ex, ey, np.cross(ex, ey)))
+    pitch, yaw, roll = cv2.RQDecomp3x3(rot)[0]
+    if abs(yaw)>75 or abs(pitch)>75 or abs(roll)>65:
+        return None
+    return float(yaw), float(pitch), float(roll)
