@@ -1,6 +1,6 @@
 import argparse, json, os, sys, time
 from pathlib import Path
-from PyQt6.QtCore import QTimer, QLockFile, QObject, pyqtSignal
+from PyQt6.QtCore import QTimer, QLockFile, QObject, pyqtSignal, Qt
 from PyQt6.QtWidgets import QApplication, QInputDialog, QLineEdit
 from proctor.core.camera import CameraThread
 from proctor.core.detector_yolo import DetectorYolo
@@ -27,7 +27,14 @@ from proctor.guard.hotkeys import HotkeyGuard
 from proctor.guard.focus import FocusWatch
 from proctor.guard.processes import ProcWatch
 from proctor.guard.clipboard import ClipboardGuard
-from proctor.guard.security import FULL_GUARD, verify_password, guard_health
+from proctor.guard.surface import SurfaceWatch
+from proctor.guard.environment import (
+    protected_mode,
+    runtime_errors,
+    admission_errors,
+    required_processes,
+)
+from proctor.guard.security import verify_password, guard_health
 
 
 class Signals(QObject):
@@ -42,37 +49,39 @@ def main():
     ap.add_argument(
         "--name", default="Ученик", help="Имя в журнале и панели наблюдения"
     )
-    ap.add_argument(
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument(
         "--protected",
         action="store_true",
-        help="Windows: включить защиту рабочего окружения",
+        help="Защищённый запуск Windows; включён по умолчанию",
+    )
+    mode.add_argument(
+        "--preview",
+        action="store_true",
+        help="Явная техническая проверка CV без защиты; не защищённая сессия",
     )
     ap.add_argument("--video")
     ap.add_argument("--config")
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--perf", choices=("auto", "weak", "balanced"))
     ap.add_argument("--profile", choices=("dev", "exam"))
-    ap.add_argument("--no-guard", action="store_true")
-    ap.add_argument("--demo", action="store_true")
     ap.add_argument("--run-seconds", type=float, help=argparse.SUPPRESS)
     args = ap.parse_args()
     os.chdir(Path(__file__).resolve().parent.parent)
-    cfg = load_config(args.config, "exam" if args.protected else args.profile)
+    try:
+        protected = protected_mode(args)
+    except ValueError as error:
+        ap.error(str(error))
+    if protected:
+        errors = runtime_errors()
+        if errors:
+            raise SystemExit("\n".join(errors))
+    cfg = load_config(args.config, "exam" if protected else "dev")
     session_name = args.name.strip()[:120] or "Ученик"
-    if cfg["profile"] == "exam":
-        import ctypes
-
-        if (
-            args.no_guard
-            or args.demo
-            or args.video
-            or args.run_seconds is not None
-            or not FULL_GUARD
-            or not ctypes.windll.shell32.IsUserAnAdmin()
-        ):
-            raise SystemExit(
-                "Защищённый режим: Windows/admin, камера и включённая защита. Для CV без lock — dev."
-            )
+    if protected:
+        errors = admission_errors(cfg)
+        if errors:
+            raise SystemExit("\n".join(errors))
     if cfg["hash_chain"]["enabled"] and not cfg["hash_chain"]["salt_hex"]:
         ensure_hash_salt(cfg)
     import cv2
@@ -145,6 +154,9 @@ def main():
     publisher = MonitorPublisher(run)
     writer = EventWriter(store)
     window = MonitorWindow()
+    if protected:
+        window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        window.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
     policy_cfg = cfg.get("policy", {})
     policy = EpisodePolicy(
         yellow=policy_cfg.get("yellow_sec", 3.0),
@@ -235,7 +247,7 @@ def main():
             QApplication.beep()
 
     signals.event.connect(event)
-    guard_on = not args.no_guard and not args.demo and cfg["profile"] == "exam"
+    guard_on = protected
     hk = HotkeyGuard(
         cfg["guard"]["hotkeys"],
         cfg["guard"]["exit_combo"],
@@ -248,40 +260,59 @@ def main():
     native_id = int(window.winId())
     fw.get_hwnd = lambda: native_id
     pw = ProcWatch(
-        cfg["guard"]["forbidden_processes"],
+        (
+            required_processes(cfg["guard"]["forbidden_processes"])
+            if guard_on
+            else cfg["guard"]["forbidden_processes"]
+        ),
         cfg["guard"]["process_check_sec"],
-        cfg["guard"]["process_mode"],
+        "log",
+        enforcing=guard_on,
     )
+    surface = SurfaceWatch(native_id) if guard_on else None
     clipboard = ClipboardGuard(
         app, cfg["guard"]["clipboard_clear_sec"], lambda kind: event(kind)
     )
     fw.lost.connect(lambda: event("FOCUS_LOST"))
     pw.found.connect(lambda name: event("FORBIDDEN_PROCESS", {"process": name}))
+
+    def fail_guard(message):
+        hk.stop()
+        fw.stop()
+        pw.stop()
+        clipboard.stop()
+        if surface:
+            surface.stop()
+        recorder.stop()
+        publisher.stop()
+        write_session(run, session_name, "failed")
+        writer.stop()
+        store.close()
+        lock.unlock()
+        raise SystemExit(message)
+
     if guard_on:
         if not hk.start():
-            hk.stop()
-            recorder.stop()
-            publisher.stop()
-            write_session(run, session_name, "failed")
-            writer.stop()
-            store.close()
-            lock.unlock()
-            raise SystemExit(
-                "Не удалось активировать защиту клавиш: " + ", ".join(hk.errors)
-            )
+            fail_guard("Не удалось активировать защиту клавиш: " + ", ".join(hk.errors))
+        if not surface.arm():
+            fail_guard("Windows не включила защиту захвата: " + surface.error)
+        surface.blocked.connect(
+            lambda title: event("FOCUS_LOST", {"overlay": title, "action": "minimize"})
+        )
+        clipboard.start()
+        if clipboard.status != "active":
+            fail_guard("Не удалось включить защиту буфера: " + clipboard.error)
         fw.start()
         pw.start()
-        clipboard.start()
+        surface.start()
         window.locked = True
 
     def exit_requested():
         if window.locked:
-            fw.enabled = False
             password, ok = QInputDialog.getText(
                 window, "Выход экзаменатора", "Пароль:", QLineEdit.EchoMode.Password
             )
             ex = cfg["guard"]["examiner"]
-            fw.enabled = True
             if not ok or not verify_password(
                 password, ex["salt_hex"], ex["hash_hex"], ex["iterations"]
             ):
@@ -330,14 +361,12 @@ def main():
     def start_calibration(mode):
         nonlocal calibration, calibration_mode, next_phase, auto_attempted
         if window.locked and ever_calibrated:
-            fw.enabled = False
             password, ok = QInputDialog.getText(
                 window,
                 "Повторная настройка",
                 "Пароль экзаменатора:",
                 QLineEdit.EchoMode.Password,
             )
-            fw.enabled = True
             ex = cfg["guard"]["examiner"]
             if not ok or not verify_password(
                 password, ex["salt_hex"], ex["hash_hex"], ex["iterations"]
@@ -519,6 +548,20 @@ def main():
                     ),
                     level=policy.level,
                     calibrated=ready,
+                    protected=guard_on,
+                    protection_ready=(
+                        guard_health(
+                            hk,
+                            fw,
+                            pw,
+                            clipboard,
+                            now,
+                            required=guard_on,
+                            surface=surface,
+                        )[0]
+                        if guard_on
+                        else False
+                    ),
                     source="video replay" if args.video else "camera",
                 ),
             )
@@ -605,10 +648,10 @@ def main():
         seconds = int(now - started)
         window.session_clock.setText(f"{seconds//60:02}:{seconds%60:02}")
         protection_ready, protection_errors = guard_health(
-            hk, fw, pw, clipboard, now, required=guard_on
+            hk, fw, pw, clipboard, now, required=guard_on, surface=surface
         )
         guard_workers = guard_on and protection_ready
-        if guard_on and not protection_ready:
+        if guard_on and not protection_ready and now - started > 2:
             event("GUARD_LOST", {"errors": protection_errors})
         window.mode_label.setText(
             "Режим защиты"
@@ -616,9 +659,14 @@ def main():
             else (
                 "Защита неполная / запускается"
                 if guard_on
-                else "Просмотр CV · защита выключена"
+                else "НЕ ЗАЩИЩЕНО · технический просмотр"
             )
         )
+        if guard_on and not protection_ready:
+            window.signal_badge.setText(
+                "ЗАЩИТА НЕ ГОТОВА · " + "; ".join(protection_errors)
+            )
+            window.signal_badge.setStyleSheet("color: #ff8c8c")
         errors = [
             type(w).__name__ + ": " + w.error for w in workers if w.status == "error"
         ]
@@ -798,12 +846,21 @@ def main():
         guard_status = (
             "hook активен" if hk.status == "active" else "НЕ АКТИВНО: " + hk.status
         )
-        for key in ("ALT", "WIN", "SHOT"):
+        for key in ("ALT", "WIN"):
             window.set_case(
                 key,
                 guard_status
                 + (" · не все способы screenshot" if key == "SHOT" else ""),
             )
+        window.set_case(
+            "SHOT",
+            guard_status
+            + (
+                " · окно исключено из захвата Windows"
+                if surface and surface.capture_ok
+                else " · исключение из захвата не подтверждено"
+            ),
+        )
         window.set_case(
             "COPY",
             guard_status
@@ -813,8 +870,11 @@ def main():
             "WINDOWS",
             (
                 (
-                    "Потоки фокуса/процессов работают; только новые процессы, не полный kiosk"
-                    if fw.isRunning() and pw.isRunning()
+                    "Фокус/процессы контролируются; чужие окна сворачиваются, программы не уничтожаются"
+                    if fw.isRunning()
+                    and pw.isRunning()
+                    and surface
+                    and surface.status == "active"
                     else "НЕ АКТИВНО: worker защиты остановлен / запускается"
                 )
                 if guard_on
@@ -868,7 +928,6 @@ def main():
         ident = item.data(Qt.ItemDataRole.UserRole)
         if not ident:
             return
-        fw.enabled = False
         try:
             if window.locked:
                 password, ok = QInputDialog.getText(
@@ -913,6 +972,8 @@ def main():
         hk.stop()
         fw.stop()
         pw.stop()
+        if surface:
+            surface.stop()
         clipboard.stop()
         for w in [cam] + workers:
             if not w.stop():
@@ -948,6 +1009,8 @@ def main():
                     pose_method=engine.face.pose_method,
                     calibration_error=calibration_error,
                     guard=hk.status,
+                    protection_required=guard_on,
+                    technical_preview=args.preview,
                     immediate_phone_conf=max(policy.phone_conf, yolo.conf_phone),
                     gaze_entry_gates=engine.debug.get("gaze_entry_gates"),
                     detail_calls=yolo.detail_calls,

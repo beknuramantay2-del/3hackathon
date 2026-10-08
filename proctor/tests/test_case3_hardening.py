@@ -70,12 +70,19 @@ def test_focus_failure_closes_answer_gate():
         status="active", checked_at=now, interval=2, blocking=[]
     )
     clip = types.SimpleNamespace(_active=True)
-    ready, errors = guard_health(keys, focus, process, clip, now)
+    surface = types.SimpleNamespace(
+        status="active", capture_ok=True, overlays_ok=True, checked_at=now
+    )
+    ready, errors = guard_health(keys, focus, process, clip, now, surface=surface)
     assert not ready and errors
     native.GetForegroundWindow = lambda: 10
     focus.check(native)
-    assert guard_health(keys, focus, process, clip, time.monotonic())[0]
-    assert not guard_health(keys, focus, process, clip, time.monotonic() + 10)[0]
+    assert guard_health(keys, focus, process, clip, time.monotonic(), surface=surface)[
+        0
+    ]
+    assert not guard_health(
+        keys, focus, process, clip, time.monotonic() + 10, surface=surface
+    )[0]
 
 
 def test_no_shortened_replay_calibration():

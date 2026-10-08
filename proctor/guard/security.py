@@ -2,21 +2,16 @@ import platform
 
 OS = platform.system()
 
+FULL_GUARD = False
 if OS == "Windows":
-    FULL_GUARD = True
     try:
         import keyboard
         import ctypes
         import win32gui
-    except ImportError as e:
-        FULL_GUARD = False
-        print(f"[guard] Windows, но нет зависимостей ({e}). Режим мониторинга.")
-elif OS in ("Linux", "Darwin"):
-    FULL_GUARD = False
-    print("WARNING: Полная блокировка клавиш недоступна. Работаю в режиме мониторинга.")
-else:
-    FULL_GUARD = False
-    print(f"WARNING: ОС {OS} не поддерживается. Режим мониторинга.")
+
+        FULL_GUARD = True
+    except ImportError:
+        pass
 
 
 def describe() -> str:
@@ -42,7 +37,9 @@ def verify_password(password, salt_hex, hash_hex, iterations):
         return False
 
 
-def guard_health(hotkeys, focus, processes, clipboard, now, required=True):
+def guard_health(
+    hotkeys, focus, processes, clipboard, now, required=True, surface=None
+):
     if not required:
         return True, []
     errors = []
@@ -61,6 +58,14 @@ def guard_health(hotkeys, focus, processes, clipboard, now, required=True):
         errors.append("Проверка процессов не активна")
     if processes.blocking:
         errors.append("Запрещённые программы: " + ", ".join(processes.blocking))
-    if not clipboard._active:
+    if not clipboard._active or getattr(clipboard, "status", "active") != "active":
         errors.append("Защита буфера не активна")
+    if (
+        surface is None
+        or surface.status != "active"
+        or not surface.capture_ok
+        or not surface.overlays_ok
+        or now - surface.checked_at > 1.0
+    ):
+        errors.append("Защита снимков/посторонних окон не подтверждена")
     return not errors, errors

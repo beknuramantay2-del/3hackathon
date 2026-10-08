@@ -118,9 +118,20 @@ class Observer(QWidget):
                     )
                 )
             state = snapshot["status"]
+            security_note = (
+                (
+                    "Защита активна"
+                    if state.get("protection_ready")
+                    else "Защита не готова"
+                )
+                if state.get("protected")
+                else "НЕ ЗАЩИЩЕНО · технический просмотр"
+            )
             levels = ("ЗЕЛЁНЫЙ", "ЖЁЛТЫЙ", "КРАСНЫЙ")
             level = state.get("level", 0)
             level = level if isinstance(level, int) and 0 <= level <= 2 else 0
+            if state.get("protected") and not state.get("protection_ready"):
+                level = 2
             self.status.setText(
                 f'{row["name"]} · {levels[level]}\nГолова: {DIRECTIONS.get(state.get("head"), "Не определяется")} · Глаза: {DIRECTIONS.get(state.get("gaze"), "Не определяется")} · Лиц: {state.get("faces", "—")} · Телефон: {"сигнал" if state.get("phone") else "нет сигнала" if state.get("phone") is False else "нет свежих данных"}\n'
                 + (
@@ -129,6 +140,7 @@ class Observer(QWidget):
                     else "Калибровка не завершена"
                 )
             )
+            self.status.setText(self.status.text() + "\n" + security_note)
         else:
             self.image.setText(snapshot["reason"])
             self.status.setText(row["name"] + " · " + snapshot["reason"])

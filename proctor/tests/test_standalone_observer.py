@@ -98,6 +98,7 @@ def test_native_proctoring_process_publishes_without_school_module(tmp_path):
             sys.executable,
             "-m",
             "proctor",
+            "--preview",
             "--video",
             str(video),
             "--config",

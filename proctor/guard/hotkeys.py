@@ -10,6 +10,23 @@ REQUIRED_KEYS = (
     "print screen",
     "ctrl+tab",
     "ctrl+shift+tab",
+    "ctrl+insert",
+    "shift+insert",
+    "ctrl+x",
+    "ctrl+t",
+    "ctrl+n",
+    "ctrl+w",
+    "ctrl+l",
+    "alt+escape",
+    "alt+f4",
+    "alt+print screen",
+    "windows+print screen",
+    "windows+shift+s",
+    "windows+g",
+    "windows+v",
+    "windows+d",
+    "windows+tab",
+    "ctrl+shift+escape",
 )
 
 
@@ -46,6 +63,10 @@ class HotkeyGuard:
         if self.monitor_only:
             print(f"[hotkey] {OS}: режим мониторинга, suppress недоступен.")
             self.status = "monitor-only"
+            return False
+        if (self.emergency or "").strip().lower() != "ctrl+shift+f12":
+            self.status = "error"
+            self.errors = ["Недопустимая комбинация выхода"]
             return False
         try:
             import keyboard

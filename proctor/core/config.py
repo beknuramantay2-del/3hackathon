@@ -148,7 +148,7 @@ def load_config(path=None, profile=None):
         and cfg["guard"]["examiner"]["hash_hex"]
     ):
         raise ConfigError(
-            f"{NAME}: в профиле exam задайте guard.exit_combo и guard.examiner.salt_hex/hash_hex"
+            f"{NAME}: настройте пароль выхода: python -m proctor.tools.set_password"
         )
 
     _need(cfg, ("store", "db"), str)

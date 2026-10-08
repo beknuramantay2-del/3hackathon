@@ -1,4 +1,5 @@
 import time
+import os
 from PyQt6.QtCore import QThread, pyqtSignal
 from .security import FULL_GUARD, OS
 
@@ -25,7 +26,12 @@ class FocusWatch(QThread):
             self.focus_ok = False
             return
         foreground = native.GetForegroundWindow()
-        self.focus_ok = foreground == mine or native.GetAncestor(foreground, 3) == mine
+        owned = getattr(native, "owner_pid", lambda hwnd: None)
+        self.focus_ok = (
+            foreground == mine
+            or native.GetAncestor(foreground, 3) == mine
+            or owned(foreground) == os.getpid()
+        )
         if not self.focus_ok:
             if not self._lost:
                 self.lost.emit()
@@ -34,7 +40,9 @@ class FocusWatch(QThread):
                 native.SetForegroundWindow(mine)
                 foreground = native.GetForegroundWindow()
                 self.focus_ok = (
-                    foreground == mine or native.GetAncestor(foreground, 3) == mine
+                    foreground == mine
+                    or native.GetAncestor(foreground, 3) == mine
+                    or owned(foreground) == os.getpid()
                 )
             except Exception as exc:
                 self.error = str(exc)
@@ -54,15 +62,17 @@ class FocusWatch(QThread):
             self.error = f"{OS}: возврат фокуса недоступен"
             return
         try:
-            import win32gui
-        except ImportError as exc:
+            from .surface import WindowsSurface
+
+            native = WindowsSurface()
+        except Exception as exc:
             self.status = "error"
             self.error = str(exc)
             return
         while self._run and not self.isInterruptionRequested():
             if self.enabled:
                 try:
-                    self.check(win32gui)
+                    self.check(native)
                 except Exception as exc:
                     self.status = "error"
                     self.focus_ok = False

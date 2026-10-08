@@ -20,10 +20,10 @@
 ```powershell
 git pull
 python -m proctor.tools.fetch_weights
-python -m proctor --perf weak
+python -m proctor --preview --perf weak
 ```
 
-Загрузчик готовит **оба** файла: `proctor/weights/yolov8n.pt` и `proctor/weights/yolov8s.pt`. Уже установленные файлы используются повторно. Интернет нужен на этапе подготовки, не во время экзамена. При отдельной проверке камеры можно запустить `python -m proctor.main --perf weak`.
+Загрузчик готовит **оба** файла: `proctor/weights/yolov8n.pt` и `proctor/weights/yolov8s.pt`. Уже установленные файлы используются повторно. Интернет нужен на этапе подготовки, не во время экзамена. При отдельной проверке камеры можно запустить `python -m proctor.main --preview --perf weak`.
 
 В `proctor/config.yaml` настройки находятся в разделе `yolo`: `detail_model`, `detail_imgsz: 384`, `detail_fps: 4.0`. `detail_model: null` возвращает поиск только nano-моделью: это экономит память, но ухудшение распознавания сложного телефона тогда ожидаемо. Такой режим не включается скрыто.
 
