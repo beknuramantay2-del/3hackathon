@@ -6,7 +6,6 @@ from PyQt6.QtCore import Qt
 from proctor.guard import hotkeys, processes
 from proctor.guard.focus import FocusWatch
 from proctor.guard.security import guard_health
-from proctor.ui.browser_keys import blocked_key
 from proctor.tools.replay_evaluator import run, direction_metrics
 
 
@@ -79,26 +78,6 @@ def test_focus_failure_closes_answer_gate():
     assert not guard_health(keys, focus, process, clip, time.monotonic() + 10)[0]
 
 
-@pytest.mark.parametrize(
-    "key,modifiers",
-    [
-        (Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier),
-        (Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier),
-        (Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier),
-        (
-            Qt.Key.Key_Tab,
-            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
-        ),
-        (Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier),
-        (Qt.Key.Key_Print, Qt.KeyboardModifier.NoModifier),
-        (Qt.Key.Key_L, Qt.KeyboardModifier.ControlModifier),
-    ],
-)
-def test_browser_shortcuts_blocked_locally(key, modifiers):
-    assert blocked_key(key, modifiers)
-    assert not blocked_key(Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier)
-
-
 def test_no_shortened_replay_calibration():
     for mode in ("none", "center"):
         with pytest.raises(ValueError, match="раздельную"):
@@ -145,38 +124,6 @@ def test_dead_camera_or_cv_worker_disables_answer_readiness():
     assert not cv_health(camera, [("Face", worker)], packet, now + 2)[0]
     worker.status = "error"
     assert not cv_health(camera, [("Face", worker)], packet, now)[0]
-
-
-@pytest.mark.skipif(
-    os.getenv("PROCTOR_WEB_SMOKE") != "1", reason="native browser event filter"
-)
-def test_native_browser_key_filter_receives_blocked_shortcut(tmp_path):
-    import subprocess, textwrap
-
-    script = textwrap.dedent("""
-        import sys
-        from PyQt6.QtCore import Qt,QCoreApplication,QEvent
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtTest import QTest
-        from proctor.ui.test_window import TestWindow
-        app=QApplication(['proctor-key-filter'])
-        events=[]
-        window=TestWindow(events.append,lambda answers:None,sys.argv[1],[])
-        window.show();QTest.qWait(800)
-        QTest.keyClick(window.view.focusProxy() or window.view,Qt.Key.Key_T,Qt.KeyboardModifier.ControlModifier)
-        QTest.qWait(100)
-        assert 'HOTKEY_BLOCKED' in events,events
-        window.dispose();window.close();QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete);app.processEvents()
-    """)
-    html = tmp_path / "exam.html"
-    html.write_text('<html><input id="answer"></html>')
-    result = subprocess.run(
-        [sys.executable, "-c", script, str(html)],
-        text=True,
-        capture_output=True,
-        timeout=12,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 def test_adaptive_budget_recovers_resolution_without_exceeding_initial_budget():

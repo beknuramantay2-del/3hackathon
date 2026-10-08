@@ -194,7 +194,6 @@ def test_overlay_arrows_for_measured_preview_but_not_unanchored():
 def test_visible_preview_label_and_calibration_readouts():
     from PyQt6.QtWidgets import QApplication
     from proctor.ui.monitor_window import MonitorWindow
-    from proctor.ui.screens import CalibrationView
 
     app = QApplication.instance() or QApplication([])
     w = MonitorWindow()
@@ -206,10 +205,7 @@ def test_visible_preview_label_and_calibration_readouts():
         "Предварительно" in w.head_card.note.text() and not w.head_card.note.isHidden()
     )
     assert w.head_card.layout().indexOf(w.head_card.note) >= 0
-    c = CalibrationView(30, external=True)
-    assert hasattr(c, "directions")
     w.close()
-    c.close()
 
 
 @pytest.mark.skipif(

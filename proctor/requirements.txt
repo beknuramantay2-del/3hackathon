@@ -2,7 +2,6 @@ ultralytics>=8.2,<9
 mediapipe>=0.10.14,<=0.10.21
 opencv-python>=4.8,<4.12
 PyQt6>=6.6,<7
-PyQt6-WebEngine>=6.6,<7
 psutil>=5.9
 screeninfo>=0.8
 keyboard>=0.13

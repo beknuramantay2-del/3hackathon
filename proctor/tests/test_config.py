@@ -8,7 +8,7 @@ def test_clean_config_starts():
     assert cfg["store"]["screenshots"] == "data/shots"
     assert cfg["guard"]["exit_combo"] == "ctrl+shift+f12"
     assert cfg["calibration"]["duration_sec"] == 30
-    assert cfg["test"]["test_url"] == ""
+    assert "test" not in cfg and "_test_url" not in cfg
 
 
 @pytest.mark.parametrize(

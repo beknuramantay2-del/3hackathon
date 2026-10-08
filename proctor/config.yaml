@@ -1,9 +1,5 @@
 profile: dev
 
-test:
-  test_url: ""
-  allowed_domains: []
-
 camera:
   index: 0
   width: 640
@@ -161,10 +157,6 @@ store:
   db: data/session.db
   screenshots: data/shots
   save_screenshots: true
-
-examiner:
-  host: 127.0.0.1
-  port: 8901
 
 hash_chain:
   enabled: true

@@ -217,7 +217,7 @@ def main():
         limitations=[
             "sensor exposure latency not measured",
             "no accuracy claim without labelled videos",
-            "UI+overlay conversion measured without WebEngine/test-page load",
+            "UI+overlay conversion measured in the standalone proctoring window",
         ],
     )
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

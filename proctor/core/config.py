@@ -65,7 +65,7 @@ def _check_rule(cfg, name):
     return enabled
 
 
-def load_config(path=None, profile=None, require_test_url=True):
+def load_config(path=None, profile=None):
     if path is None:
         here = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
         alt = "proctor/config.yaml"
@@ -83,22 +83,6 @@ def load_config(path=None, profile=None, require_test_url=True):
     prof = profile or cfg.get("profile", "dev")
     if prof not in ("dev", "exam"):
         raise ConfigError(f"{NAME}: поле 'profile' должно быть dev или exam")
-
-    test = _need(cfg, ("test",), dict)
-    url = _need(cfg, ("test", "test_url"), str)
-    domains = _need_list(cfg, ("test", "allowed_domains"), str)
-    if prof == "exam" and require_test_url and not url.strip():
-        raise ConfigError(
-            f"{NAME}: в профиле exam поле 'test.test_url' не должно быть пустым"
-        )
-    if url.strip() and not os.path.isfile(url):
-        from urllib.parse import urlparse as _up
-
-        parts = _up(url)
-        if parts.scheme not in ("http", "https") or not parts.hostname:
-            raise ConfigError(
-                f"{NAME}: поле 'test.test_url' должно быть путем к файлу или http(s) URL"
-            )
 
     cam = _need(cfg, ("camera",), dict)
     _need(cfg, ("camera", "index"), int)
@@ -170,15 +154,6 @@ def load_config(path=None, profile=None, require_test_url=True):
     _need(cfg, ("store", "db"), str)
     _need(cfg, ("store", "screenshots"), str)
     _need(cfg, ("store", "save_screenshots"), bool)
-
-    host = _need(cfg, ("examiner", "host"), str)
-    if host not in ("127.0.0.1", "localhost"):
-        raise ConfigError(
-            f"{NAME}: поле 'examiner.host' разрешено только 127.0.0.1 или localhost"
-        )
-    port = _need(cfg, ("examiner", "port"), int)
-    if not 1024 <= port <= 65535:
-        raise ConfigError(f"{NAME}: поле 'examiner.port' должно быть 1024-65535")
 
     _need(cfg, ("report", "out"), str)
 
@@ -257,8 +232,6 @@ def load_config(path=None, profile=None, require_test_url=True):
             raise ConfigError(f"{NAME}: evidence.{key} в [{low},{high}]")
 
     cfg["profile"] = prof
-    cfg["_domains"] = domains
-    cfg["_test_url"] = url
     cfg["_path"] = os.path.abspath(path)
     return cfg
 

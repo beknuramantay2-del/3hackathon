@@ -1,6 +1,5 @@
 {
   "check": "Technical regression and resource check; not an accuracy dataset",
-  "tests": "237 passed in 58.63s with native model/WebEngine/school opt-ins",
   "phone_reproducer": {
     "source": "One private photograph of a monitor, cropped to camera preview; not published",
     "independent_scenes": 1,
@@ -375,8 +374,7 @@
     },
     "limitations": [
       "sensor exposure latency not measured",
-      "no accuracy claim without labelled videos",
-      "UI+overlay conversion measured without WebEngine/test-page load"
+      "no accuracy claim without labelled videos"
     ],
     "effective_detector_source_commit": "0849c8619c6bb145f139a1b58ae2cb29af07b4ec",
     "effective_detector_sha256": "d72fabeb4e9c67cf88f0472a5de4e8e09622e7d376469e9c2aaaed24753b7ebe",
@@ -506,8 +504,7 @@
     },
     "limitations": [
       "sensor exposure latency not measured",
-      "no accuracy claim without labelled videos",
-      "UI+overlay conversion measured without WebEngine/test-page load"
+      "no accuracy claim without labelled videos"
     ]
   },
   "limitations": [
@@ -517,7 +514,7 @@
     "No real-camera sensor or physical event-to-notice latency measured",
     "CPU process percentage uses 100% per logical CPU",
     "Not a benchmark on Intel i5-4200M",
-    "No full school WebEngine load in the benchmark",
-    "Final whitespace formatting is not a behavioural benchmark change"
+    "Final whitespace formatting is not a behavioural benchmark change",
+    "Archived CV measurement before proctoring-only entrypoint update"
   ]
 }

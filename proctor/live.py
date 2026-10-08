@@ -20,6 +20,7 @@ from proctor.core.pipeline import hardware_profile, Timings
 from proctor.core.overlay import render_overlay
 from proctor.core.store import Store, EventWriter
 from proctor.core.events import make_violation, SEVERITY
+from proctor.core.monitoring import MonitorPublisher, write_session
 from proctor.ui.monitor_window import MonitorWindow, DIRECTIONS
 from proctor.core.presentation import event_label
 from proctor.guard.hotkeys import HotkeyGuard
@@ -35,7 +36,17 @@ class Signals(QObject):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Живой CV-прокторинг без страницы теста")
+    ap = argparse.ArgumentParser(
+        description="Локальный прокторинг: камера, калибровка и наблюдение"
+    )
+    ap.add_argument(
+        "--name", default="Ученик", help="Имя в журнале и панели наблюдения"
+    )
+    ap.add_argument(
+        "--protected",
+        action="store_true",
+        help="Windows: включить защиту рабочего окружения",
+    )
     ap.add_argument("--video")
     ap.add_argument("--config")
     ap.add_argument("--debug", action="store_true")
@@ -46,7 +57,8 @@ def main():
     ap.add_argument("--run-seconds", type=float, help=argparse.SUPPRESS)
     args = ap.parse_args()
     os.chdir(Path(__file__).resolve().parent.parent)
-    cfg = load_config(args.config, args.profile, require_test_url=False)
+    cfg = load_config(args.config, "exam" if args.protected else args.profile)
+    session_name = args.name.strip()[:120] or "Ученик"
     if cfg["profile"] == "exam":
         import ctypes
 
@@ -129,6 +141,8 @@ def main():
         str(run / "shots"),
         cfg["hash_chain"]["salt_hex"] if cfg["hash_chain"]["enabled"] else "",
     )
+    write_session(run, session_name, "running")
+    publisher = MonitorPublisher(run)
     writer = EventWriter(store)
     window = MonitorWindow()
     policy_cfg = cfg.get("policy", {})
@@ -194,6 +208,7 @@ def main():
         data["calibrated"] = calibration_complete(engine.calib)
         data["episode_id"] = episode_id
         data["source"] = "video replay" if args.video else "camera"
+        data["name"] = session_name
         violation = make_violation(kind, duration, "", data)
         if level is not None:
             violation.severity = level
@@ -246,6 +261,8 @@ def main():
         if not hk.start():
             hk.stop()
             recorder.stop()
+            publisher.stop()
+            write_session(run, session_name, "failed")
             writer.stop()
             store.close()
             lock.unlock()
@@ -405,7 +422,7 @@ def main():
                     engine.reset()
                     ever_calibrated = True
                     calibration_error = ""
-                    message = "Готово: голова и глаза различают все направления. Требуется проверка реальных сценариев."
+                    message = "Калибровка завершена. Наблюдение за головой и глазами включено."
                     window.log(message)
                     window.calibration_finished(message)
                     calibration = None
@@ -417,7 +434,9 @@ def main():
                 calibration = None
                 calibration_error = str(exc)
                 message = (
-                    "Экзамен не готов: " + calibration_error + ". Повторите настройку."
+                    "Калибровка не принята: "
+                    + calibration_error
+                    + ". Повторите настройку."
                 )
                 window.log(message)
                 window.calibration_finished(message)
@@ -482,6 +501,27 @@ def main():
                 states=engine.debug,
             )
             window.show_frame(vis)
+            publisher.offer(
+                vis,
+                packet.seq,
+                packet.captured_at,
+                dict(
+                    name=session_name,
+                    head=engine.debug.get("head", "UNKNOWN"),
+                    gaze=engine.debug.get("gaze", "UNKNOWN"),
+                    faces=(
+                        engine.face.n_faces if engine.fresh(engine.face, now) else None
+                    ),
+                    phone=(
+                        bool(conditions.get("PHONE_DETECTED"))
+                        if yolo.status == "ready" and engine.fresh(engine.yolo, now)
+                        else None
+                    ),
+                    level=policy.level,
+                    calibrated=ready,
+                    source="video replay" if args.video else "camera",
+                ),
+            )
             timings.add("ui_render", time.perf_counter() - s)
             timings.add("preview_age", time.monotonic() - packet.captured_at)
         if now - last_ui < 0.15:
@@ -540,7 +580,11 @@ def main():
         window.signal_badge.setText(
             labels[policy.level] + (" · калибровка не завершена" if not ready else "")
             if policy.level
-            else labels[0] if ready else "Калибровка обязательна · экзамен не готов"
+            else (
+                labels[0]
+                if ready
+                else "Калибровка обязательна · направления ещё не настроены"
+            )
         )
         window.signal_badge.setStyleSheet(
             "color: "
@@ -778,7 +822,12 @@ def main():
             ),
         )
         window.set_case(
-            "TABS", "Нет браузера в этом режиме. Защита вкладок — --embedded-test"
+            "TABS",
+            (
+                "Hook переключений активен; встроенного браузера нет"
+                if guard_on and hk.status == "active"
+                else "Встроенного браузера нет; клавиши не блокируются в просмотре"
+            ),
         )
         age = lambda r: f"{(now-r.captured_at)*1000:.0f}ms" if r.seq >= 0 else "—"
         camera_rate = cam.camera_fps if packet and now - packet.captured_at < 1 else 0.0
@@ -870,6 +919,8 @@ def main():
                 w.wait()
         recorder.submit(policy.close())
         recorder.stop()
+        publisher.stop()
+        write_session(run, session_name, "finished")
         writer.stop()
         (run / "timings.json").write_text(json.dumps(timings.snapshot(), indent=2))
         (run / "calibration.json").write_text(json.dumps(engine.calib, indent=2))

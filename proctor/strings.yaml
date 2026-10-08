@@ -1,4 +1,4 @@
-start_title: Начало тестирования
+start_title: Локальный прокторинг
 start_fio: ФИО студента
 start_button: Начать калибровку
 camera_found: Камера найдена
@@ -6,10 +6,9 @@ camera_not_found: Камера не найдена
 calib_text: Смотрите на точку
 calib_left: Осталось
 calib_cancel: Отмена
-test_title: Тестирование
 watch_active: Наблюдение активно
 watch_fixed: Зафиксировано
-result_title: Тестирование завершено
+result_title: Наблюдение завершено
 result_open: Открыть отчёт
 result_exit: Выход
 examiner_title: Наблюдение за сессией
@@ -22,7 +21,6 @@ no_violations: Нарушений не зафиксировано
 total: Итого
 unlock_button: Ввод пароля
 preview_empty: Нет видеосигнала
-test_unavailable: Тест недоступен. Обратитесь к экзаменатору.
 student: Студент
 no_frame: Нет кадра
 th_time: Время
