@@ -42,6 +42,9 @@ def run(video, cfg, calibration_mode="mandatory", timeline_out=None):
         adaptive=False,
         phone_class=yc["phone_class"],
         person_class=yc["person_class"],
+        detail_model=yc.get("detail_model"),
+        detail_imgsz=yc.get("detail_imgsz", 384),
+        detail_fps=yc.get("detail_fps", 4.0),
         detail_search=yc.get("detail_search", True),
         desk_search=yc.get("desk_search", True),
     )
@@ -84,7 +87,7 @@ def run(video, cfg, calibration_mode="mandatory", timeline_out=None):
                 r = yolo.process(packet)
                 yolo.output.put(r)
                 eng.on_yolo(r)
-                next_yolo = t + 1 / yc["target_fps"]
+                next_yolo = t + 1 / yolo.budget.target_fps
             if t >= next_face:
                 result = face.process(packet)
                 eng.on_face(result)

@@ -25,3 +25,5 @@ python -m proctor.main --perf weak
 - [Исходные replay-измерения](docs/benchmarks/direction-regression-native.json)
 
 Ранние документы CV_AUDIT, CV_LIVE, SCHOOL_MVP и CV_CALIBRATION_EPISODES описывают предыдущие этапы, а не актуальный порядок запуска.
+
+- [Частично видимый телефон: обновление весов и проверка](docs/PHONE_DETECTION.md)

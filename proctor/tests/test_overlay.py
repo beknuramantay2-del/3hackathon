@@ -29,3 +29,17 @@ def test_prediction_preview_only():
     out = render_overlay(p, FaceResult(), y, HandResult(), mirror=False)
     assert out[40, 29:32].sum() > 0
     assert b.x1 == 20
+
+
+def test_phone_overlay_stays_visible_between_bounded_four_hz_updates():
+    b = Box(0.6, 20, 40, 60, 80, confirmed=True)
+    y = YoloResult(phones=[b], captured_at=10.0)
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    f = FaceResult(face_boxes=[(100, 40, 150, 80)], captured_at=10.0)
+    out = render_overlay(FramePacket(1, 10.45, frame), f, y, HandResult(), mirror=False)
+    assert tuple(out[60, 20]) == (80, 80, 240)
+    assert out[60, 100].sum() == 0
+    expired = render_overlay(
+        FramePacket(2, 10.7, frame), f, y, HandResult(), mirror=False
+    )
+    assert expired.sum() == 0

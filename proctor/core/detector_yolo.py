@@ -25,7 +25,14 @@ class DetectorYolo(LatestWorker):
         person_class=0,
         detail_search=True,
         desk_search=True,
+        detail_model=None,
+        detail_imgsz=384,
+        detail_fps=4.0,
     ):
+        self.detail_model_name = detail_model if detail_search else None
+        target_fps = (
+            min(target_fps, detail_fps) if self.detail_model_name else target_fps
+        )
         super().__init__(target_fps, parent, adaptive)
         self.model_name, self.imgsz = model_name, imgsz
         self.conf_phone, self.conf_person = conf_phone, conf_person
@@ -34,9 +41,12 @@ class DetectorYolo(LatestWorker):
         self.budget.imgsz = imgsz
         self.budget.image_ceiling = imgsz
         self.budget.min_imgsz = min(imgsz, 320)
-        self.detail_imgsz = min(640, imgsz + 128)
+        self.detail_imgsz = (
+            detail_imgsz if self.detail_model_name else min(640, imgsz + 128)
+        )
         self.tracker = LiteTracker(strong=conf_phone, min_hits=2, ttl=0.65)
         self.model = None
+        self.detail_model = None
         self.requested_confidence = conf_phone
         self.detail_search = detail_search
         self.hand_provider = None
@@ -50,10 +60,11 @@ class DetectorYolo(LatestWorker):
         self.detail_calls = 0
 
     def setup(self):
-        if self.offline and not os.path.isfile(self.model_name):
-            raise FileNotFoundError(
-                f"Нет весов {self.model_name}: python -m proctor.tools.fetch_weights"
-            )
+        for path in (self.model_name, self.detail_model_name):
+            if path and self.offline and not os.path.isfile(path):
+                raise FileNotFoundError(
+                    f"Нет весов {path}: python -m proctor.tools.fetch_weights"
+                )
         import torch
 
         torch.set_num_threads(self.threads)
@@ -63,6 +74,9 @@ class DetectorYolo(LatestWorker):
 
         self.model = YOLO(self.model_name)
         self.validate_classes(self.model.names)
+        if self.detail_model_name:
+            self.detail_model = YOLO(self.detail_model_name)
+            self.validate_classes(self.detail_model.names)
         import numpy as np
 
         self.model.predict(
@@ -72,6 +86,15 @@ class DetectorYolo(LatestWorker):
             device=self.device,
             verbose=False,
         )
+
+        if self.detail_model is not None:
+            self.detail_model.predict(
+                np.zeros((320, 320, 3), dtype=np.uint8),
+                imgsz=self.detail_imgsz,
+                classes=[self.PHONE],
+                device=self.device,
+                verbose=False,
+            )
 
     def validate_classes(self, names):
         labels = names if isinstance(names, dict) else dict(enumerate(names))
@@ -96,7 +119,12 @@ class DetectorYolo(LatestWorker):
             )
 
     def _infer(self, image, size, classes, offset=(0, 0)):
-        result = self.model.predict(
+        model = (
+            self.detail_model
+            if classes == [self.PHONE] and self.detail_model is not None
+            else self.model
+        )
+        result = model.predict(
             image,
             imgsz=size,
             conf=0.10,
@@ -139,6 +167,19 @@ class DetectorYolo(LatestWorker):
         if observed and self.calls % 8 != 0:
             b = max(observed, key=lambda p: p.conf)
             cx, cy = (b.x1 + b.x2) / 2, (b.y1 + b.y2) / 2
+            if (
+                self.detail_model_name
+                and previous is not None
+                and previous.detail_rect is not None
+                and captured_at is not None
+                and 0 <= captured_at - previous.captured_at <= 0.65
+                and b.source == "detail"
+            ):
+                x1, y1, x2, y2 = previous.detail_rect
+                if x1 <= b.x1 < b.x2 <= x2 and y1 <= b.y1 < b.y2 <= y2:
+                    self.detail_region = "candidate retained context"
+                    self.detail_rect = (x1, y1, x2, y2)
+                    return frame[y1:y2, x1:x2], (x1, y1)
             tiny = b.conf < 0.15 and min(b.x2 - b.x1, b.y2 - b.y1) < 24
             rw, rh = (
                 (
@@ -156,9 +197,9 @@ class DetectorYolo(LatestWorker):
             self.detail_region = "candidate zoom" if tiny else "candidate context"
         elif self.desk_search and self.search_step % 4 != 3:
             phase = self.search_step % 4
-            left = (0.31, 0.0, 0.62)[phase]
+            left = (0.19, 0.0, 0.38)[phase]
             x1, y1 = int(w * left), int(h * 0.55)
-            x2, y2 = min(w, x1 + max(1, int(w * 0.38))), h
+            x2, y2 = min(w, x1 + max(1, int(w * 0.62))), h
             self.detail_region = ("desk center", "desk left", "desk right")[phase]
             self.search_step += 1
         else:
@@ -195,7 +236,8 @@ class DetectorYolo(LatestWorker):
             or max(p.conf for p in phones) < 0.65
             or any(min(p.x2 - p.x1, p.y2 - p.y1) < 64 for p in phones)
         )
-        if self.detail_search and needs_detail and self.calls % 2 == 0:
+        detail_due = self.detail_model_name or self.calls % 2 == 0
+        if self.detail_search and needs_detail and detail_due:
             roi, origin = self._detail_roi(packet.frame, phones, packet.captured_at)
             if roi.size:
                 s = time.perf_counter()

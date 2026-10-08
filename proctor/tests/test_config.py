@@ -15,6 +15,10 @@ def test_clean_config_starts():
     "section,key,value",
     [
         ("yolo", "target_fps", 0),
+        ("yolo", "detail_imgsz", 321),
+        ("yolo", "detail_imgsz", 256),
+        ("yolo", "detail_fps", 0),
+        ("yolo", "detail_model", 42),
         ("face", "max_faces", 1),
         ("face", "target_fps", 0),
         ("face", "hands_fps", -1),

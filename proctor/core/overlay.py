@@ -1,7 +1,9 @@
 import cv2
 
 
-def render_overlay(packet, face, yolo, hands, mirror=True, max_age=0.35, states=None):
+def render_overlay(
+    packet, face, yolo, hands, mirror=True, max_age=0.35, states=None, max_yolo_age=0.65
+):
     vis = cv2.flip(packet.frame, 1) if mirror else packet.frame.copy()
     h, w = vis.shape[:2]
 
@@ -18,11 +20,11 @@ def render_overlay(packet, face, yolo, hands, mirror=True, max_age=0.35, states=
             vis, label, (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1
         )
 
-    def fresh(result):
+    def fresh(result, age_limit=max_age):
         return (
             result is not None
             and result.captured_at > 0
-            and 0 <= packet.captured_at - result.captured_at <= max_age
+            and 0 <= packet.captured_at - result.captured_at <= age_limit
             and not result.error
         )
 
@@ -108,7 +110,7 @@ def render_overlay(packet, face, yolo, hands, mirror=True, max_age=0.35, states=
                         2,
                         tipLength=0.4,
                     )
-    if fresh(yolo):
+    if fresh(yolo, max_yolo_age):
         for b in yolo.persons:
             draw((b.x1, b.y1, b.x2, b.y2), "person", (240, 140, 70))
         for b in yolo.candidates:

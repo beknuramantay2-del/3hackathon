@@ -13,6 +13,9 @@ camera:
 
 yolo:
   model: proctor/weights/yolov8n.pt
+  detail_model: proctor/weights/yolov8s.pt
+  detail_imgsz: 384
+  detail_fps: 4.0
   imgsz: 640
   conf_phone: 0.25
   conf_person: 0.5

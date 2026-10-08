@@ -120,6 +120,26 @@ def load_config(path=None, profile=None, require_test_url=True):
     for key in ("conf_phone", "conf_person", "target_fps"):
         _need(cfg, ("yolo", key), (int, float))
 
+    yc = cfg["yolo"]
+    if yc.get("detail_model") is not None and not isinstance(yc["detail_model"], str):
+        raise ConfigError(f"{NAME}: yolo.detail_model — путь к весам или null")
+    for key, default, low, high in (
+        ("detail_imgsz", 384, 320, 640),
+        ("detail_fps", 4.0, 3, 8),
+    ):
+        value = yc.get(key, default)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not low <= value <= high
+        ):
+            raise ConfigError(f"{NAME}: yolo.{key} в [{low},{high}]")
+    if (
+        not isinstance(yc.get("detail_imgsz", 384), int)
+        or yc.get("detail_imgsz", 384) % 32
+    ):
+        raise ConfigError(f"{NAME}: yolo.detail_imgsz — целое, кратное 32")
+
     _need(cfg, ("face", "max_faces"), int)
     _need(cfg, ("calibration", "duration_sec"), (int, float))
 

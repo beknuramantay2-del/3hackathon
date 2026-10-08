@@ -179,6 +179,11 @@ def main():
         adaptive=adaptive,
         phone_class=yc["phone_class"],
         person_class=yc["person_class"],
+        detail_search=yc.get("detail_search", True),
+        desk_search=yc.get("desk_search", True),
+        detail_model=yc.get("detail_model"),
+        detail_imgsz=yc.get("detail_imgsz", 384),
+        detail_fps=yc.get("detail_fps", 4.0),
     )
     face = FaceMeshThread(
         fc["max_faces"],
